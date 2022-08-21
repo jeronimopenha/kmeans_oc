@@ -1,0 +1,11 @@
+**/__pycache__
+**/*.pyc
+**/*.idea
+**/*.env
+**/*test
+**/*venv
+**/*build
+**/*cmake-build-debug
+**/*cmake-build-release
+**/*.vcd
+**/*.out
