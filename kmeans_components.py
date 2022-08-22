@@ -56,7 +56,7 @@ class KMeans:
                 Systask('writememh', output_file, mem)
             ),
         )
-        
+
         m.Initial(
             If(read_f)(
                 Systask('readmemh', init_file, mem),
@@ -64,91 +64,6 @@ class KMeans:
         )
         m.EmbeddedCode('  //synthesis translate_on')
 
-        self.cache[name] = m
-        return m
-
-    def create_counter(self):
-        name = 'counter'
-        if name in self.cache.keys():
-            return self.cache[name]
-
-        m = Module(name)
-
-        _u.initialize_regs(m)
-        self.cache[name] = m
-        return m
-
-    def create_kmeans_core(self):
-        name = 'kmeans_core'
-        if name in self.cache.keys():
-            return self.cache[name]
-
-        m = Module(name)
-
-        d_width = m.Parameter('d_width', 16)
-
-        clk = m.Input('clk')
-
-        d0 = m.Input('d0', d_width)
-        d1 = m.Input('d1', d_width)
-
-        k0_0 = m.Input('k0_0', d_width)
-        k0_1 = m.Input('k0_1', d_width)
-        k1_0 = m.Input('k1_0', d_width)
-        k1_1 = m.Input('k1_1', d_width)
-
-        d0_out = m.OutputReg('d0_out', d_width)
-        d1_out = m.OutputReg('d1_out', d_width)
-        k_out = m.OutputReg('k_out')
-
-        m.EmbeddedCode('//st1 outputs - sub data kx')
-        st0_00 = m.Reg('st0_00', d_width)
-        st0_01 = m.Reg('st0_01', d_width)
-        st0_10 = m.Reg('st0_10', d_width)
-        st0_11 = m.Reg('st0_11', d_width)
-        st0_d0 = m.Reg('st0_d0', d_width)
-        st0_d1 = m.Reg('st0_d1', d_width)
-
-        m.EmbeddedCode('//st1 outputs - pow')
-        st1_00 = m.Reg('st1_00', d_width*2)
-        st1_01 = m.Reg('st1_01', d_width*2)
-        st1_10 = m.Reg('st1_10', d_width*2)
-        st1_11 = m.Reg('st1_11', d_width*2)
-        st1_d0 = m.Reg('st1_d0', d_width)
-        st1_d1 = m.Reg('st1_d1', d_width)
-
-        m.EmbeddedCode('//st2 outputs - add')
-        st2_0 = m.Reg('st2_0', (d_width*2)+1)
-        st2_1 = m.Reg('st2_1', (d_width*2)+1)
-        st2_d0 = m.Reg('st2_d0', d_width)
-        st2_d1 = m.Reg('st2_d1', d_width)
-
-        m.Always(Posedge(clk))(
-            st0_00(d0 - k0_0),
-            st0_01(d1 - k0_1),
-            st0_10(d0 - k1_0),
-            st0_11(d1 - k1_1),
-            st0_d0(d0),
-            st0_d1(d1),
-
-            st1_00(st0_00*st0_00),
-            st1_01(st0_01*st0_01),
-            st1_10(st0_10*st0_10),
-            st1_11(st0_11*st0_11),
-            st1_d0(st0_d0),
-            st1_d1(st0_d1),
-
-            st2_0(st1_00 + st1_01),
-            st2_1(st1_10 + st1_11),
-            st2_d0(st1_d0),
-            st2_d1(st1_d1),
-
-            d0_out(st2_d0),
-            d1_out(st2_d1),
-            k_out(Mux(st2_0 < st2_1, 0, 1)),
-        )
-
-        _u.initialize_regs(m)
         self.cache[name] = m
         return m
 
@@ -161,10 +76,10 @@ class KMeans:
 
         mem_d0_init_file = m.Parameter('mem_d0_init_file', './db/d0.txt')
         mem_d1_init_file = m.Parameter('mem_d1_init_file', './db/d1.txt')
-        data_width = m.Parameter('data_width', 16)
+        data_width = m.Parameter('data_width', 8)
         n_input_data_b_depth = m.Parameter('n_input_data_b_depth', 8)
         n_input_data = m.Parameter('n_input_data', 256)
-        acc_sum_width = m.Parameter('acc_sum_width', ceil(log2(256)))
+        acc_sum_width = m.Parameter('acc_sum_width', 8 + ceil(log2(256)))
         p_k0_0 = m.Parameter('p_k0_0', 0, data_width)
         p_k0_1 = m.Parameter('p_k0_1', 0, data_width)
         p_k1_0 = m.Parameter('p_k1_0', 1, data_width)
@@ -184,7 +99,7 @@ class KMeans:
         m.EmbeddedCode('//control regs and wires - end')
 
         m.EmbeddedCode('\n//Centroids regs and wires - begin')
-        up_centroids = m.Wire('up_centroids')
+        up_centroids = m.Reg('up_centroids')
 
         m.EmbeddedCode('//centroids values')
         k0_0 = m.Reg('k0_0', data_width)
@@ -483,7 +398,7 @@ class KMeans:
             ('clk', clk),
             ('rd_addr', mem_sum_d0_init_rd_addr),
             ('out', mem_sum_d0_init_out),
-            ('wr',mem_sum_d0_init_wr),
+            ('wr', mem_sum_d0_init_wr),
             ('wr_addr', mem_sum_d0_init_wr_addr),
             ('wr_data', mem_sum_d0_init_wr_data),
         ]
@@ -500,7 +415,7 @@ class KMeans:
             ('clk', clk),
             ('rd_addr', mem_sum_d1_init_rd_addr),
             ('out', mem_sum_d1_init_out),
-            ('wr',mem_sum_d1_init_wr),
+            ('wr', mem_sum_d1_init_wr),
             ('wr_addr', mem_sum_d1_init_wr_addr),
             ('wr_data', mem_sum_d1_init_wr_data),
         ]
@@ -517,7 +432,7 @@ class KMeans:
             ('clk', clk),
             ('rd_addr', mem_sum_d0_rd_addr),
             ('out', mem_sum_d0_out),
-            ('wr',mem_sum_d0_wr),
+            ('wr', mem_sum_d0_wr),
             ('wr_addr', mem_sum_d0_wr_addr),
             ('wr_data', mem_sum_d0_wr_data),
         ]
@@ -534,7 +449,7 @@ class KMeans:
             ('clk', clk),
             ('rd_addr', mem_sum_d1_rd_addr),
             ('out', mem_sum_d1_out),
-            ('wr',mem_sum_d1_wr),
+            ('wr', mem_sum_d1_wr),
             ('wr_addr', mem_sum_d1_wr_addr),
             ('wr_data', mem_sum_d1_wr_data),
         ]
@@ -546,9 +461,57 @@ class KMeans:
         self.cache[name] = m
         return m
 
-    def create_kmeans_testbench(self):
-        pass
+    def create_kmeans_testbench(self) -> str:
+        name = "testbench_kmeans_k2s2"
+        if name in self.cache.keys():
+            return self.cache[name]
+
+        m = Module(name)
+
+        clk = m.Reg('clk')
+        rst = m.Reg('rst')
+        start = m.Reg('start')
+
+        # kmeans top
+        par = [
+            ('mem_d0_init_file', './db/d0.txt'),
+            ('mem_d1_init_file', './db/d1.txt'),
+            ('data_width', 8),
+            ('n_input_data_b_depth', 8),
+            ('n_input_data', 256),
+            ('acc_sum_width', 8 + ceil(log2(256))),
+            ('p_k0_0', 0),
+            ('p_k0_1', 0),
+            ('p_k1_0', 1),
+            ('p_k1_1', 1),
+        ]
+        con = [
+            ('clk', clk),
+            ('rst', rst),
+            ('start', start)
+        ]
+        aux = self.create_kmeans_top()
+        m.Instance(aux, aux.name, par, con)
+
+        _u.initialize_regs(m, {"clk": 0, "rst": 1, "start": 0})
+        simulation.setup_waveform(m)
+        m.Initial(
+            EmbeddedCode("@(posedge clk);"),
+            EmbeddedCode("@(posedge clk);"),
+            EmbeddedCode("@(posedge clk);"),
+            rst(0),
+            start(1),
+            Delay(400),
+            Finish(),
+        )
+        m.EmbeddedCode("always #5clk=~clk;")
+
+        m.to_verilog(os.getcwd() + "/verilog/testbench_kmeans_k2s2.v")
+        #sim = simulation.Simulator(m, sim="iverilog")
+        # rslt = sim.run()
+        # print(rslt)
 
 
 k = KMeans()
-k.create_kmeans_top().to_verilog('./verilog/kmeans_top.v')
+#k.create_kmeans_top().to_verilog('./verilog/kmeans_top.v')
+k.create_kmeans_testbench()

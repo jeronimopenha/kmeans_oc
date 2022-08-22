@@ -6,8 +6,9 @@ if os.getcwd() not in sys.path:
 
 
 def main():
+    str_f = '{:08b}'
     for i in range(256):
-        print(i)
+        print(str_f.format(i))
 
     pass
 
