@@ -7,6 +7,7 @@ module kmeans_k2n2_top #
   parameter data_width = 16,
   parameter n_input_data_b_depth = 8,
   parameter n_input_data = 256,
+  parameter acc_sum_width = 8,
   parameter [data_width-1:0] p_k0_0 = 0,
   parameter [data_width-1:0] p_k0_1 = 0,
   parameter [data_width-1:0] p_k1_0 = 1,
@@ -18,29 +19,42 @@ module kmeans_k2n2_top #
   input start
 );
 
-  //Centroids regs - begin
+
+  //control regs and wires - begin
+  reg kmeans_rdy;
+  reg acc_rdy;
+  reg ltcy_counter_rst;
+  reg ltcy_counter_en;
+  reg [2-1:0] ltcy_counter;
+  //control regs and wires - end
+
+  //Centroids regs and wires - begin
+  wire up_centroids;
+  //centroids values
   reg [data_width-1:0] k0_0;
   reg [data_width-1:0] k0_1;
   reg [data_width-1:0] k1_0;
   reg [data_width-1:0] k1_1;
+  //new centroids values
+  reg [data_width-1:0] k0_0_n;
+  reg [data_width-1:0] k0_1_n;
+  reg [data_width-1:0] k1_0_n;
+  reg [data_width-1:0] k1_1_n;
+  //centroids data counters
+  reg [n_input_data_b_depth+1-1:0] k0_counter;
+  reg [n_input_data_b_depth+1-1:0] k1_counter;
   //Centroids regs - end
 
   //input data memories regs and wires - begin
+  //d0 memory
   wire [n_input_data_b_depth-1:0] mem_d0_rd_addr;
   wire [data_width-1:0] mem_d0_out;
+  //d1 memory
   wire [n_input_data_b_depth-1:0] mem_d1_rd_addr;
   wire [data_width-1:0] mem_d1_out;
   //input data memories regs and wires - end
 
   //kmeans pipeline (kp) wires and regs - begin
-  //data input
-  wire [data_width-1:0] kp_d0;
-  wire [data_width-1:0] kp_d1;
-  //centroids
-  wire [data_width-1:0] kp_k0_0;
-  wire [data_width-1:0] kp_k0_1;
-  wire [data_width-1:0] kp_k1_0;
-  wire [data_width-1:0] kp_k1_1;
   //st1 outputs - sub data kx
   reg [data_width-1:0] kp_st0_sub00;
   reg [data_width-1:0] kp_st0_sub01;
@@ -66,6 +80,36 @@ module kmeans_k2n2_top #
   reg kp_st3_k_out;
   //kmeans pipeline (kp) wires and regs - end
 
+  //kmeans accumulator memories wires and regs - begin
+  reg mem_sum_init_rst;
+  reg mem_sum_init_rst_wr_addr;
+  //sum init memory init d0
+  wire mem_sum_d0_init_rd_addr;
+  wire mem_sum_d0_init_out;
+  wire mem_sum_d0_init_wr;
+  wire mem_sum_d0_init_wr_addr;
+  wire mem_sum_d0_init_wr_data;
+  //sum init memory init d1
+  wire mem_sum_d1_init_rd_addr;
+  wire mem_sum_d1_init_out;
+  wire mem_sum_d1_init_wr;
+  wire mem_sum_d1_init_wr_addr;
+  wire mem_sum_d1_init_wr_data;
+  //sum memory d0
+  wire mem_sum_d0_rd_addr;
+  wire [acc_sum_width-1:0] mem_sum_d0_out;
+  wire mem_sum_d0_wr;
+  wire mem_sum_d0_wr_addr;
+  wire [acc_sum_width-1:0] mem_sum_d0_wr_data;
+  //sum  memory d1
+  wire mem_sum_d1_rd_addr;
+  wire [acc_sum_width-1:0] mem_sum_d1_out;
+  wire mem_sum_d1_wr;
+  wire mem_sum_d1_wr_addr;
+  wire [acc_sum_width-1:0] mem_sum_d1_wr_data;
+
+  //kmeans accumulator memory wires and regs - end
+
   //Implementation - begin
 
   //centroids values control - begin
@@ -76,26 +120,27 @@ module kmeans_k2n2_top #
       k0_1 <= p_k0_1;
       k1_0 <= p_k1_0;
       k1_1 <= p_k1_1;
-    end 
+    end else begin
+      if(up_centroids) begin
+        k0_0 <= k0_0_n;
+        k0_1 <= k0_1_n;
+        k1_0 <= k1_0_n;
+        k1_1 <= k1_1_n;
+      end 
+    end
   end
 
   //centroids values control - end
 
   //kmeans pipeline (kp) implementation - begin
-  assign kp_k0_0 = k0_0;
-  assign kp_k0_1 = k0_1;
-  assign kp_k1_0 = k1_0;
-  assign kp_k1_1 = k1_1;
-  assign kp_d0 = mem_d0_out;
-  assign kp_d1 = mem_d1_out;
 
   always @(posedge clk) begin
-    kp_st0_sub00 <= kp_d0 - kp_k0_0;
-    kp_st0_sub01 <= kp_d1 - kp_k0_1;
-    kp_st0_sub10 <= kp_d0 - kp_k1_0;
-    kp_st0_sub11 <= kp_d1 - kp_k1_1;
-    kp_st0_d0 <= kp_d0;
-    kp_st0_d1 <= kp_d1;
+    kp_st0_sub00 <= mem_d0_out - k0_0;
+    kp_st0_sub01 <= mem_d1_out - k0_1;
+    kp_st0_sub10 <= mem_d0_out - k1_0;
+    kp_st0_sub11 <= mem_d1_out - k1_1;
+    kp_st0_d0 <= mem_d0_out;
+    kp_st0_d1 <= mem_d1_out;
     kp_st1_sqr00 <= kp_st0_sub00 * kp_st0_sub00;
     kp_st1_sqr01 <= kp_st0_sub01 * kp_st0_sub01;
     kp_st1_sqr10 <= kp_st0_sub10 * kp_st0_sub10;
@@ -112,6 +157,87 @@ module kmeans_k2n2_top #
   end
 
   //kmeans pipeline (kp) implementation - end
+
+  //kmeans accumulator memories implementation - begin
+  //sum init memory d0
+  assign mem_sum_d0_init_rd_addr = kp_st3_k_out;
+  assign mem_sum_d0_init_wr = (mem_sum_init_rst)? 1 : acc_rdy;
+  assign mem_sum_d0_init_wr_addr = (mem_sum_init_rst)? mem_sum_init_rst_wr_addr : kp_st3_k_out;
+  assign mem_sum_d0_init_wr_data = (mem_sum_init_rst)? 0 : 1;
+  //sum init memory d1
+  assign mem_sum_d1_init_rd_addr = kp_st3_k_out;
+  assign mem_sum_d1_init_wr = (mem_sum_init_rst)? 1 : acc_rdy;
+  assign mem_sum_d1_init_wr_addr = (mem_sum_init_rst)? mem_sum_init_rst_wr_addr : kp_st3_k_out;
+  assign mem_sum_d1_init_wr_data = (mem_sum_init_rst)? 0 : 1;
+  //sum memory d0
+  assign mem_sum_d0_rd_addr = kp_st3_k_out;
+  assign mem_sum_d0_wr = acc_rdy;
+  assign mem_sum_d0_wr_addr = kp_st3_k_out;
+  assign mem_sum_d0_wr_data = (mem_sum_d0_init_out)? mem_sum_d0_out + kp_st3_d0_out : kp_st3_d0_out;
+  //sum memory d1
+  assign mem_sum_d1_rd_addr = kp_st3_k_out;
+  assign mem_sum_d1_wr = acc_rdy;
+  assign mem_sum_d1_wr_addr = kp_st3_k_out;
+  assign mem_sum_d1_wr_data = (mem_sum_d1_init_out)? mem_sum_d1_out + kp_st3_d1_out : kp_st3_d1_out;
+
+  //init memories reset
+
+  always @(posedge clk) begin
+    if(rst) begin
+      kmeans_rdy <= 0;
+      mem_sum_init_rst <= 1;
+      mem_sum_init_rst_wr_addr <= 0;
+    end else begin
+      if(start) begin
+        if(&mem_sum_init_rst_wr_addr) begin
+          mem_sum_init_rst <= 0;
+          kmeans_rdy <= 1;
+        end else begin
+          mem_sum_init_rst_wr_addr <= mem_sum_init_rst_wr_addr + 1;
+        end
+      end 
+    end
+  end
+
+
+  //centroids data counters
+
+  always @(posedge clk) begin
+    if(rst) begin
+      k0_counter <= 0;
+      k1_counter <= 0;
+    end else begin
+      case({ acc_rdy, kp_st3_k_out })
+        2'b10: begin
+          k0_counter <= k0_counter + 1;
+        end
+        2'b11: begin
+          k1_counter <= k1_counter + 1;
+        end
+      endcase
+    end
+  end
+
+
+  //latency counter exec
+
+  always @(posedge clk) begin
+    if(ltcy_counter_rst) begin
+      ltcy_counter <= 0;
+      acc_rdy <= 0;
+    end else begin
+      if(ltcy_counter_en) begin
+        if(ltcy_counter == 3) begin
+          acc_rdy <= 1;
+        end else begin
+          ltcy_counter <= ltcy_counter + 1;
+        end
+      end 
+    end
+  end
+
+
+  //kmeans accumulator memory implementation - end
 
   //Implementation - end
 
@@ -156,10 +282,21 @@ module kmeans_k2n2_top #
   //Modules instantiation - end
 
   initial begin
+    kmeans_rdy = 0;
+    acc_rdy = 0;
+    ltcy_counter_rst = 0;
+    ltcy_counter_en = 0;
+    ltcy_counter = 0;
     k0_0 = 0;
     k0_1 = 0;
     k1_0 = 0;
     k1_1 = 0;
+    k0_0_n = 0;
+    k0_1_n = 0;
+    k1_0_n = 0;
+    k1_1_n = 0;
+    k0_counter = 0;
+    k1_counter = 0;
     kp_st0_sub00 = 0;
     kp_st0_sub01 = 0;
     kp_st0_sub10 = 0;
@@ -179,6 +316,8 @@ module kmeans_k2n2_top #
     kp_st3_d0_out = 0;
     kp_st3_d1_out = 0;
     kp_st3_k_out = 0;
+    mem_sum_init_rst = 0;
+    mem_sum_init_rst_wr_addr = 0;
   end
 
 

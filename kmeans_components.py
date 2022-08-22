@@ -1,4 +1,5 @@
 from veriloggen import *
+from math import ceil, log2
 import util as _u
 
 
@@ -156,13 +157,12 @@ class KMeans:
 
         m = Module(name)
 
-        m = Module(name)
-
         mem_d0_init_file = m.Parameter('mem_d0_init_file', './db/d0.txt')
         mem_d1_init_file = m.Parameter('mem_d1_init_file', './db/d1.txt')
         data_width = m.Parameter('data_width', 16)
         n_input_data_b_depth = m.Parameter('n_input_data_b_depth', 8)
         n_input_data = m.Parameter('n_input_data', 256)
+        acc_sum_width = m.Parameter('acc_sum_width', ceil(log2(256)))
         p_k0_0 = m.Parameter('p_k0_0', 0, data_width)
         p_k0_1 = m.Parameter('p_k0_1', 0, data_width)
         p_k1_0 = m.Parameter('p_k1_0', 1, data_width)
@@ -172,31 +172,45 @@ class KMeans:
         rst = m.Input('rst')
         start = m.Input('start')
 
-        m.EmbeddedCode('//Centroids regs - begin')
+        m.EmbeddedCode('\n//control regs and wires - begin')
+        kmeans_rdy = m.Reg('kmeans_rdy')
+        acc_rdy = m.Reg('acc_rdy')
+        ltcy_counter_rst = m.Reg('ltcy_counter_rst')
+        ltcy_counter_en = m.Reg('ltcy_counter_en')
+        ltcy_counter = m.Reg('ltcy_counter', 2)
+        m.EmbeddedCode('//control regs and wires - end')
+
+        m.EmbeddedCode('\n//Centroids regs and wires - begin')
+        up_centroids = m.Wire('up_centroids')
+
+        m.EmbeddedCode('//centroids values')
         k0_0 = m.Reg('k0_0', data_width)
         k0_1 = m.Reg('k0_1', data_width)
         k1_0 = m.Reg('k1_0', data_width)
         k1_1 = m.Reg('k1_1', data_width)
+
+        m.EmbeddedCode('//new centroids values')
+        k0_0_n = m.Reg('k0_0_n', data_width)
+        k0_1_n = m.Reg('k0_1_n', data_width)
+        k1_0_n = m.Reg('k1_0_n', data_width)
+        k1_1_n = m.Reg('k1_1_n', data_width)
+
+        m.EmbeddedCode('//centroids data counters')
+        k0_counter = m.Reg('k0_counter', n_input_data_b_depth+1)
+        k1_counter = m.Reg('k1_counter', n_input_data_b_depth+1)
         m.EmbeddedCode('//Centroids regs - end')
 
         m.EmbeddedCode('\n//input data memories regs and wires - begin')
+        m.EmbeddedCode('//d0 memory')
         mem_d0_rd_addr = m.Wire('mem_d0_rd_addr', n_input_data_b_depth)
         mem_d0_out = m.Wire('mem_d0_out', data_width)
+
+        m.EmbeddedCode('//d1 memory')
         mem_d1_rd_addr = m.Wire('mem_d1_rd_addr', n_input_data_b_depth)
         mem_d1_out = m.Wire('mem_d1_out', data_width)
         m.EmbeddedCode('//input data memories regs and wires - end')
 
         m.EmbeddedCode('\n//kmeans pipeline (kp) wires and regs - begin')
-        m.EmbeddedCode('//data input')
-        kp_d0 = m.Wire('kp_d0', data_width)
-        kp_d1 = m.Wire('kp_d1', data_width)
-
-        m.EmbeddedCode('//centroids')
-        kp_k0_0 = m.Wire('kp_k0_0', data_width)
-        kp_k0_1 = m.Wire('kp_k0_1', data_width)
-        kp_k1_0 = m.Wire('kp_k1_0', data_width)
-        kp_k1_1 = m.Wire('kp_k1_1', data_width)
-
         m.EmbeddedCode('//st1 outputs - sub data kx')
         kp_st0_sub00 = m.Reg('kp_st0_sub00', data_width)
         kp_st0_sub01 = m.Reg('kp_st0_sub01', data_width)
@@ -225,6 +239,41 @@ class KMeans:
         kp_st3_k_out = m.Reg('kp_st3_k_out')
         m.EmbeddedCode('//kmeans pipeline (kp) wires and regs - end')
 
+        m.EmbeddedCode(
+            '\n//kmeans accumulator memories wires and regs - begin')
+
+        mem_sum_init_rst = m.Reg('mem_sum_init_rst')
+        mem_sum_init_rst_wr_addr = m.Reg('mem_sum_init_rst_wr_addr')
+
+        m.EmbeddedCode('//sum init memory init d0')
+        mem_sum_d0_init_rd_addr = m.Wire('mem_sum_d0_init_rd_addr')
+        mem_sum_d0_init_out = m.Wire('mem_sum_d0_init_out')
+        mem_sum_d0_init_wr = m.Wire('mem_sum_d0_init_wr')
+        mem_sum_d0_init_wr_addr = m.Wire('mem_sum_d0_init_wr_addr')
+        mem_sum_d0_init_wr_data = m.Wire('mem_sum_d0_init_wr_data')
+
+        m.EmbeddedCode('//sum init memory init d1')
+        mem_sum_d1_init_rd_addr = m.Wire('mem_sum_d1_init_rd_addr')
+        mem_sum_d1_init_out = m.Wire('mem_sum_d1_init_out')
+        mem_sum_d1_init_wr = m.Wire('mem_sum_d1_init_wr')
+        mem_sum_d1_init_wr_addr = m.Wire('mem_sum_d1_init_wr_addr')
+        mem_sum_d1_init_wr_data = m.Wire('mem_sum_d1_init_wr_data')
+
+        m.EmbeddedCode('//sum memory d0')
+        mem_sum_d0_rd_addr = m.Wire('mem_sum_d0_rd_addr')
+        mem_sum_d0_out = m.Wire('mem_sum_d0_out', acc_sum_width)
+        mem_sum_d0_wr = m.Wire('mem_sum_d0_wr')
+        mem_sum_d0_wr_addr = m.Wire('mem_sum_d0_wr_addr')
+        mem_sum_d0_wr_data = m.Wire('mem_sum_d0_wr_data', acc_sum_width)
+
+        m.EmbeddedCode('//sum  memory d1')
+        mem_sum_d1_rd_addr = m.Wire('mem_sum_d1_rd_addr')
+        mem_sum_d1_out = m.Wire('mem_sum_d1_out', acc_sum_width)
+        mem_sum_d1_wr = m.Wire('mem_sum_d1_wr')
+        mem_sum_d1_wr_addr = m.Wire('mem_sum_d1_wr_addr')
+        mem_sum_d1_wr_data = m.Wire('mem_sum_d1_wr_data', acc_sum_width)
+        m.EmbeddedCode('\n//kmeans accumulator memory wires and regs - end')
+
         m.EmbeddedCode('\n//Implementation - begin')
 
         m.EmbeddedCode('\n//centroids values control - begin')
@@ -234,25 +283,24 @@ class KMeans:
                 k0_1(p_k0_1),
                 k1_0(p_k1_0),
                 k1_1(p_k1_1),
+            ).Elif(up_centroids)(
+                k0_0(k0_0_n),
+                k0_1(k0_1_n),
+                k1_0(k1_0_n),
+                k1_1(k1_1_n),
             )
         )
         m.EmbeddedCode('//centroids values control - end')
 
         m.EmbeddedCode('\n//kmeans pipeline (kp) implementation - begin')
-        kp_k0_0.assign(k0_0)
-        kp_k0_1.assign(k0_1)
-        kp_k1_0.assign(k1_0)
-        kp_k1_1.assign(k1_1)
-        kp_d0.assign(mem_d0_out)
-        kp_d1.assign(mem_d1_out)
 
         m.Always(Posedge(clk))(
-            kp_st0_sub00(kp_d0 - kp_k0_0),
-            kp_st0_sub01(kp_d1 - kp_k0_1),
-            kp_st0_sub10(kp_d0 - kp_k1_0),
-            kp_st0_sub11(kp_d1 - kp_k1_1),
-            kp_st0_d0(kp_d0),
-            kp_st0_d1(kp_d1),
+            kp_st0_sub00(mem_d0_out - k0_0),
+            kp_st0_sub01(mem_d1_out - k0_1),
+            kp_st0_sub10(mem_d0_out - k1_0),
+            kp_st0_sub11(mem_d1_out - k1_1),
+            kp_st0_d0(mem_d0_out),
+            kp_st0_d1(mem_d1_out),
             kp_st1_sqr00(kp_st0_sub00*kp_st0_sub00),
             kp_st1_sqr01(kp_st0_sub01*kp_st0_sub01),
             kp_st1_sqr10(kp_st0_sub10*kp_st0_sub10),
@@ -268,6 +316,86 @@ class KMeans:
             kp_st3_d1_out(kp_st2_d1),
         )
         m.EmbeddedCode('//kmeans pipeline (kp) implementation - end')
+
+        m.EmbeddedCode(
+            '\n//kmeans accumulator memories implementation - begin')
+        m.EmbeddedCode('//sum init memory d0')
+        mem_sum_d0_init_rd_addr.assign(kp_st3_k_out)
+        mem_sum_d0_init_wr.assign(Mux(mem_sum_init_rst, 1, acc_rdy))
+        mem_sum_d0_init_wr_addr.assign(
+            Mux(mem_sum_init_rst, mem_sum_init_rst_wr_addr, kp_st3_k_out))
+        mem_sum_d0_init_wr_data.assign(Mux(mem_sum_init_rst, 0, 1))
+
+        m.EmbeddedCode('//sum init memory d1')
+        mem_sum_d1_init_rd_addr.assign(kp_st3_k_out)
+        mem_sum_d1_init_wr.assign(Mux(mem_sum_init_rst, 1, acc_rdy))
+        mem_sum_d1_init_wr_addr.assign(
+            Mux(mem_sum_init_rst, mem_sum_init_rst_wr_addr, kp_st3_k_out))
+        mem_sum_d1_init_wr_data.assign(Mux(mem_sum_init_rst, 0, 1))
+
+        m.EmbeddedCode('//sum memory d0')
+        mem_sum_d0_rd_addr.assign(kp_st3_k_out)
+        mem_sum_d0_wr.assign(acc_rdy)
+        mem_sum_d0_wr_addr.assign(kp_st3_k_out)
+        mem_sum_d0_wr_data.assign(
+            Mux(mem_sum_d0_init_out, mem_sum_d0_out + kp_st3_d0_out, kp_st3_d0_out))
+
+        m.EmbeddedCode('//sum memory d1')
+        mem_sum_d1_rd_addr.assign(kp_st3_k_out)
+        mem_sum_d1_wr.assign(acc_rdy)
+        mem_sum_d1_wr_addr.assign(kp_st3_k_out)
+        mem_sum_d1_wr_data.assign(
+            Mux(mem_sum_d1_init_out, mem_sum_d1_out + kp_st3_d1_out, kp_st3_d1_out))
+
+        m.EmbeddedCode('\n//init memories reset')
+        m.Always(Posedge(clk))(
+            If(rst)(
+                kmeans_rdy(0),
+                mem_sum_init_rst(1),
+                mem_sum_init_rst_wr_addr(0)
+            ).Elif(start)(
+                If(Uand(mem_sum_init_rst_wr_addr))(
+                    mem_sum_init_rst(0),
+                    kmeans_rdy(1),
+                ).Else(
+                    mem_sum_init_rst_wr_addr.inc(),
+                ),
+            )
+        )
+
+        m.EmbeddedCode('\n//centroids data counters')
+        m.Always(Posedge(clk))(
+            If(rst)(
+                k0_counter(0),
+                k1_counter(0),
+            ).Else(
+                Case(Cat(acc_rdy, kp_st3_k_out))(
+                    When(Int(2, 2, 2))(
+                        k0_counter.inc()
+                    ),
+                    When(Int(3, 2, 2))(
+                        k1_counter.inc()
+                    ),
+                )
+            )
+        )
+
+        
+        m.EmbeddedCode('\n//latency counter exec')
+        m.Always(Posedge(clk))(
+            If(ltcy_counter_rst)(
+                ltcy_counter(0),
+                acc_rdy(0),
+            ).Elif(ltcy_counter_en)(
+                If(ltcy_counter == 3)(
+                    acc_rdy(1),
+                ).Else(
+                    ltcy_counter.inc()
+                )
+            )
+        )
+
+        m.EmbeddedCode('\n//kmeans accumulator memory implementation - end')
 
         m.EmbeddedCode('\n//Implementation - end')
 
