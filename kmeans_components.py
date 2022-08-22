@@ -50,17 +50,19 @@ class KMeans:
             ),
         )
 
+        m.EmbeddedCode('  //synthesis translate_off')
         m.Always(Posedge(clk))(
             If(AndList(wr, write_f))(
                 Systask('writememh', output_file, mem)
             ),
         )
-
+        
         m.Initial(
             If(read_f)(
                 Systask('readmemh', init_file, mem),
             )
         )
+        m.EmbeddedCode('  //synthesis translate_on')
 
         self.cache[name] = m
         return m
@@ -173,11 +175,12 @@ class KMeans:
         start = m.Input('start')
 
         m.EmbeddedCode('\n//control regs and wires - begin')
+        kmeans_rst = m.Reg('kmeans_rst')
         kmeans_rdy = m.Reg('kmeans_rdy')
         acc_rdy = m.Reg('acc_rdy')
-        ltcy_counter_rst = m.Reg('ltcy_counter_rst')
-        ltcy_counter_en = m.Reg('ltcy_counter_en')
-        ltcy_counter = m.Reg('ltcy_counter', 2)
+        class_done = m.Reg('class_done')
+        data_counter_en = m.Reg('data_counter_en')
+        data_counter = m.Reg('data_counter', n_input_data_b_depth+1)
         m.EmbeddedCode('//control regs and wires - end')
 
         m.EmbeddedCode('\n//Centroids regs and wires - begin')
@@ -245,6 +248,9 @@ class KMeans:
         mem_sum_init_rst = m.Reg('mem_sum_init_rst')
         mem_sum_init_rst_wr_addr = m.Reg('mem_sum_init_rst_wr_addr')
 
+        bck_rd = m.Reg('bck_rd')
+        bck_rd_addr = m.Reg('bck_rd_addr')
+
         m.EmbeddedCode('//sum init memory init d0')
         mem_sum_d0_init_rd_addr = m.Wire('mem_sum_d0_init_rd_addr')
         mem_sum_d0_init_out = m.Wire('mem_sum_d0_init_out')
@@ -276,7 +282,7 @@ class KMeans:
 
         m.EmbeddedCode('\n//Implementation - begin')
 
-        m.EmbeddedCode('\n//centroids values control - begin')
+        m.EmbeddedCode('\n//centroids values control')
         m.Always(Posedge(clk))(
             If(rst)(
                 k0_0(p_k0_0),
@@ -290,9 +296,8 @@ class KMeans:
                 k1_1(k1_1_n),
             )
         )
-        m.EmbeddedCode('//centroids values control - end')
 
-        m.EmbeddedCode('\n//kmeans pipeline (kp) implementation - begin')
+        m.EmbeddedCode('\n//kmeans pipeline (kp) implementation')
 
         m.Always(Posedge(clk))(
             kp_st0_sub00(mem_d0_out - k0_0),
@@ -315,10 +320,9 @@ class KMeans:
             kp_st3_d0_out(kp_st2_d0),
             kp_st3_d1_out(kp_st2_d1),
         )
-        m.EmbeddedCode('//kmeans pipeline (kp) implementation - end')
 
         m.EmbeddedCode(
-            '\n//kmeans accumulator memories implementation - begin')
+            '\n//kmeans accumulator memories implementation')
         m.EmbeddedCode('//sum init memory d0')
         mem_sum_d0_init_rd_addr.assign(kp_st3_k_out)
         mem_sum_d0_init_wr.assign(Mux(mem_sum_init_rst, 1, acc_rdy))
@@ -334,14 +338,14 @@ class KMeans:
         mem_sum_d1_init_wr_data.assign(Mux(mem_sum_init_rst, 0, 1))
 
         m.EmbeddedCode('//sum memory d0')
-        mem_sum_d0_rd_addr.assign(kp_st3_k_out)
+        mem_sum_d0_rd_addr.assign(Mux(bck_rd, bck_rd_addr, kp_st3_k_out))
         mem_sum_d0_wr.assign(acc_rdy)
         mem_sum_d0_wr_addr.assign(kp_st3_k_out)
         mem_sum_d0_wr_data.assign(
             Mux(mem_sum_d0_init_out, mem_sum_d0_out + kp_st3_d0_out, kp_st3_d0_out))
 
         m.EmbeddedCode('//sum memory d1')
-        mem_sum_d1_rd_addr.assign(kp_st3_k_out)
+        mem_sum_d1_rd_addr.assign(Mux(bck_rd, bck_rd_addr, kp_st3_k_out))
         mem_sum_d1_wr.assign(acc_rdy)
         mem_sum_d1_wr_addr.assign(kp_st3_k_out)
         mem_sum_d1_wr_data.assign(
@@ -349,11 +353,11 @@ class KMeans:
 
         m.EmbeddedCode('\n//init memories reset')
         m.Always(Posedge(clk))(
-            If(rst)(
+            If(kmeans_rst)(
                 kmeans_rdy(0),
                 mem_sum_init_rst(1),
                 mem_sum_init_rst_wr_addr(0)
-            ).Elif(start)(
+            ).Else(
                 If(Uand(mem_sum_init_rst_wr_addr))(
                     mem_sum_init_rst(0),
                     kmeans_rdy(1),
@@ -365,7 +369,7 @@ class KMeans:
 
         m.EmbeddedCode('\n//centroids data counters')
         m.Always(Posedge(clk))(
-            If(rst)(
+            If(kmeans_rst)(
                 k0_counter(0),
                 k1_counter(0),
             ).Else(
@@ -380,30 +384,66 @@ class KMeans:
             )
         )
 
-        
-        m.EmbeddedCode('\n//latency counter exec')
+        m.EmbeddedCode('\n//data and latency counter exec')
         m.Always(Posedge(clk))(
-            If(ltcy_counter_rst)(
-                ltcy_counter(0),
+            If(kmeans_rst)(
+                data_counter(0),
                 acc_rdy(0),
-            ).Elif(ltcy_counter_en)(
-                If(ltcy_counter == 3)(
-                    acc_rdy(1),
+                class_done(0),
+            ).Elif(data_counter_en)(
+                If(data_counter == n_input_data - 1)(
+                    class_done(1),
+                    acc_rdy(0),
                 ).Else(
-                    ltcy_counter.inc()
+                    If(data_counter == 3)(
+                        acc_rdy(1)
+                    ),
+                    data_counter.inc()
                 )
             )
         )
 
-        m.EmbeddedCode('\n//kmeans accumulator memory implementation - end')
+        fsm_kmeans_control = m.Reg('fsm_kmeans_control', 6)
+        fsm_kc_kmeans_rst = m.Localparam('fsm_kc_kmeans_rst', 0)
+        fsm_kc_wait_init = m.Localparam('fsm_kc_wait_init', 1)
+        fsm_kc_wait_class = m.Localparam('fsm_kc_wait_class', 2)
+
+        m.EmbeddedCode('\n//fsm control')
+        m.Always(Posedge(clk))(
+            If(rst)(
+                kmeans_rst(0),
+                up_centroids(0),
+                fsm_kmeans_control(fsm_kc_kmeans_rst)
+            ).Elif(start)(
+                Case(fsm_kmeans_control)(
+                    When(fsm_kc_kmeans_rst)(
+                        kmeans_rst(1),
+                        fsm_kmeans_control(fsm_kc_wait_init),
+                    ),
+                    When(fsm_kc_wait_init)(
+                        kmeans_rst(0),
+                        If(kmeans_rdy)(
+                            data_counter_en(1),
+                            fsm_kmeans_control(fsm_kc_wait_class)
+                        )
+                    ),
+                    When(fsm_kc_wait_class)(
+                        If(class_done)(
+                            data_counter_en(0),
+                        )
+                    )
+                )
+            )
+        )
 
         m.EmbeddedCode('\n//Implementation - end')
 
         m.EmbeddedCode('\n//Modules instantiation - begin')
-        m.EmbeddedCode('\n//kmeans input data memories - begin')
+        m.EmbeddedCode('\n//kmeans input data memories')
         m.EmbeddedCode('//d0 memory')
         aux = self.create_RAM()
         par = [
+            ('read_f', Int(1, 1, 2)),
             ('init_file', mem_d0_init_file),
             ('write_f', Int(0, 1, 2)),
             ('depth', n_input_data_b_depth),
@@ -411,13 +451,14 @@ class KMeans:
         ]
         con = [
             ('clk', clk),
-            ('rd_addr', mem_d0_rd_addr),
+            ('rd_addr', data_counter[0:n_input_data_b_depth]),
             ('out', mem_d0_out),
         ]
         m.Instance(aux, '%s_d0' % aux.name, par, con)
 
         m.EmbeddedCode('//d1 memory')
         par = [
+            ('read_f', Int(1, 1, 2)),
             ('init_file', mem_d1_init_file),
             ('write_f', Int(0, 1, 2)),
             ('depth', n_input_data_b_depth),
@@ -425,11 +466,80 @@ class KMeans:
         ]
         con = [
             ('clk', clk),
-            ('rd_addr', mem_d1_rd_addr),
+            ('rd_addr', data_counter[0:n_input_data_b_depth]),
             ('out', mem_d1_out),
         ]
         m.Instance(aux, '%s_d1' % aux.name, par, con)
-        m.EmbeddedCode('\n//kmeans input data memories - end')
+
+        m.EmbeddedCode('\n//Sum memories and init memories')
+        m.EmbeddedCode('//d0 init memory')
+        par = [
+            ('read_f', Int(0, 1, 2)),
+            ('write_f', Int(0, 1, 2)),
+            ('depth', 1),
+            ('width', 1)
+        ]
+        con = [
+            ('clk', clk),
+            ('rd_addr', mem_sum_d0_init_rd_addr),
+            ('out', mem_sum_d0_init_out),
+            ('wr',mem_sum_d0_init_wr),
+            ('wr_addr', mem_sum_d0_init_wr_addr),
+            ('wr_data', mem_sum_d0_init_wr_data),
+        ]
+        m.Instance(aux, '%s_sum_d0_init' % aux.name, par, con)
+
+        m.EmbeddedCode('//d1 init memory')
+        par = [
+            ('read_f', Int(0, 1, 2)),
+            ('write_f', Int(0, 1, 2)),
+            ('depth', 1),
+            ('width', 1)
+        ]
+        con = [
+            ('clk', clk),
+            ('rd_addr', mem_sum_d1_init_rd_addr),
+            ('out', mem_sum_d1_init_out),
+            ('wr',mem_sum_d1_init_wr),
+            ('wr_addr', mem_sum_d1_init_wr_addr),
+            ('wr_data', mem_sum_d1_init_wr_data),
+        ]
+        m.Instance(aux, '%s_sum_d1_init' % aux.name, par, con)
+
+        m.EmbeddedCode('//d0 sum memory')
+        par = [
+            ('read_f', Int(0, 1, 2)),
+            ('write_f', Int(0, 1, 2)),
+            ('depth', 1),
+            ('width', acc_sum_width)
+        ]
+        con = [
+            ('clk', clk),
+            ('rd_addr', mem_sum_d0_rd_addr),
+            ('out', mem_sum_d0_out),
+            ('wr',mem_sum_d0_wr),
+            ('wr_addr', mem_sum_d0_wr_addr),
+            ('wr_data', mem_sum_d0_wr_data),
+        ]
+        m.Instance(aux, '%s_sum_d0' % aux.name, par, con)
+
+        m.EmbeddedCode('//d1 sum memory')
+        par = [
+            ('read_f', Int(0, 1, 2)),
+            ('write_f', Int(0, 1, 2)),
+            ('depth', 1),
+            ('width', acc_sum_width)
+        ]
+        con = [
+            ('clk', clk),
+            ('rd_addr', mem_sum_d1_rd_addr),
+            ('out', mem_sum_d1_out),
+            ('wr',mem_sum_d1_wr),
+            ('wr_addr', mem_sum_d1_wr_addr),
+            ('wr_data', mem_sum_d1_wr_data),
+        ]
+        m.Instance(aux, '%s_sum_d1' % aux.name, par, con)
+
         m.EmbeddedCode('\n//Modules instantiation - end')
 
         _u.initialize_regs(m)

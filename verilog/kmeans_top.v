@@ -21,11 +21,12 @@ module kmeans_k2n2_top #
 
 
   //control regs and wires - begin
+  reg kmeans_rst;
   reg kmeans_rdy;
   reg acc_rdy;
-  reg ltcy_counter_rst;
-  reg ltcy_counter_en;
-  reg [2-1:0] ltcy_counter;
+  reg class_done;
+  reg data_counter_en;
+  reg [n_input_data_b_depth+1-1:0] data_counter;
   //control regs and wires - end
 
   //Centroids regs and wires - begin
@@ -83,6 +84,8 @@ module kmeans_k2n2_top #
   //kmeans accumulator memories wires and regs - begin
   reg mem_sum_init_rst;
   reg mem_sum_init_rst_wr_addr;
+  reg bck_rd;
+  reg bck_rd_addr;
   //sum init memory init d0
   wire mem_sum_d0_init_rd_addr;
   wire mem_sum_d0_init_out;
@@ -112,7 +115,7 @@ module kmeans_k2n2_top #
 
   //Implementation - begin
 
-  //centroids values control - begin
+  //centroids values control
 
   always @(posedge clk) begin
     if(rst) begin
@@ -130,9 +133,8 @@ module kmeans_k2n2_top #
     end
   end
 
-  //centroids values control - end
 
-  //kmeans pipeline (kp) implementation - begin
+  //kmeans pipeline (kp) implementation
 
   always @(posedge clk) begin
     kp_st0_sub00 <= mem_d0_out - k0_0;
@@ -156,9 +158,8 @@ module kmeans_k2n2_top #
     kp_st3_d1_out <= kp_st2_d1;
   end
 
-  //kmeans pipeline (kp) implementation - end
 
-  //kmeans accumulator memories implementation - begin
+  //kmeans accumulator memories implementation
   //sum init memory d0
   assign mem_sum_d0_init_rd_addr = kp_st3_k_out;
   assign mem_sum_d0_init_wr = (mem_sum_init_rst)? 1 : acc_rdy;
@@ -170,12 +171,12 @@ module kmeans_k2n2_top #
   assign mem_sum_d1_init_wr_addr = (mem_sum_init_rst)? mem_sum_init_rst_wr_addr : kp_st3_k_out;
   assign mem_sum_d1_init_wr_data = (mem_sum_init_rst)? 0 : 1;
   //sum memory d0
-  assign mem_sum_d0_rd_addr = kp_st3_k_out;
+  assign mem_sum_d0_rd_addr = (bck_rd)? bck_rd_addr : kp_st3_k_out;
   assign mem_sum_d0_wr = acc_rdy;
   assign mem_sum_d0_wr_addr = kp_st3_k_out;
   assign mem_sum_d0_wr_data = (mem_sum_d0_init_out)? mem_sum_d0_out + kp_st3_d0_out : kp_st3_d0_out;
   //sum memory d1
-  assign mem_sum_d1_rd_addr = kp_st3_k_out;
+  assign mem_sum_d1_rd_addr = (bck_rd)? bck_rd_addr : kp_st3_k_out;
   assign mem_sum_d1_wr = acc_rdy;
   assign mem_sum_d1_wr_addr = kp_st3_k_out;
   assign mem_sum_d1_wr_data = (mem_sum_d1_init_out)? mem_sum_d1_out + kp_st3_d1_out : kp_st3_d1_out;
@@ -183,19 +184,17 @@ module kmeans_k2n2_top #
   //init memories reset
 
   always @(posedge clk) begin
-    if(rst) begin
+    if(kmeans_rst) begin
       kmeans_rdy <= 0;
       mem_sum_init_rst <= 1;
       mem_sum_init_rst_wr_addr <= 0;
     end else begin
-      if(start) begin
-        if(&mem_sum_init_rst_wr_addr) begin
-          mem_sum_init_rst <= 0;
-          kmeans_rdy <= 1;
-        end else begin
-          mem_sum_init_rst_wr_addr <= mem_sum_init_rst_wr_addr + 1;
-        end
-      end 
+      if(&mem_sum_init_rst_wr_addr) begin
+        mem_sum_init_rst <= 0;
+        kmeans_rdy <= 1;
+      end else begin
+        mem_sum_init_rst_wr_addr <= mem_sum_init_rst_wr_addr + 1;
+      end
     end
   end
 
@@ -203,7 +202,7 @@ module kmeans_k2n2_top #
   //centroids data counters
 
   always @(posedge clk) begin
-    if(rst) begin
+    if(kmeans_rst) begin
       k0_counter <= 0;
       k1_counter <= 0;
     end else begin
@@ -219,35 +218,75 @@ module kmeans_k2n2_top #
   end
 
 
-  //latency counter exec
+  //data and latency counter exec
 
   always @(posedge clk) begin
-    if(ltcy_counter_rst) begin
-      ltcy_counter <= 0;
+    if(kmeans_rst) begin
+      data_counter <= 0;
       acc_rdy <= 0;
+      class_done <= 0;
     end else begin
-      if(ltcy_counter_en) begin
-        if(ltcy_counter == 3) begin
-          acc_rdy <= 1;
+      if(data_counter_en) begin
+        if(data_counter == n_input_data - 1) begin
+          class_done <= 1;
+          acc_rdy <= 0;
         end else begin
-          ltcy_counter <= ltcy_counter + 1;
+          if(data_counter == 3) begin
+            acc_rdy <= 1;
+          end 
+          data_counter <= data_counter + 1;
         end
       end 
     end
   end
 
+  reg [6-1:0] fsm_kmeans_control;
+  localparam fsm_kc_kmeans_rst = 0;
+  localparam fsm_kc_wait_init = 1;
+  localparam fsm_kc_wait_class = 2;
 
-  //kmeans accumulator memory implementation - end
+  //fsm control
+
+  always @(posedge clk) begin
+    if(rst) begin
+      kmeans_rst <= 0;
+      up_centroids <= 0;
+      fsm_kmeans_control <= fsm_kc_kmeans_rst;
+    end else begin
+      if(start) begin
+        case(fsm_kmeans_control)
+          fsm_kc_kmeans_rst: begin
+            kmeans_rst <= 1;
+            fsm_kmeans_control <= fsm_kc_wait_init;
+          end
+          fsm_kc_wait_init: begin
+            kmeans_rst <= 0;
+            if(kmeans_rdy) begin
+              data_counter_en <= 1;
+              fsm_kmeans_control <= fsm_kc_wait_class;
+            end 
+          end
+          fsm_kc_wait_class: begin
+            if(class_done) begin
+              data_counter_en <= 0;
+            end 
+          end
+        endcase
+      end 
+    end
+  end
+
 
   //Implementation - end
 
   //Modules instantiation - begin
 
-  //kmeans input data memories - begin
+  //kmeans input data memories
   //d0 memory
 
   RAM
   #(
+    .read_f(1'b1),
     .init_file(mem_d0_init_file),
     .write_f(1'b0),
     .depth(n_input_data_b_depth),
@@ -256,7 +295,7 @@ module kmeans_k2n2_top #
   RAM_d0
   (
     .clk(clk),
-    .rd_addr(mem_d0_rd_addr),
+    .rd_addr(data_counter[n_input_data_b_depth-1:0]),
     .out(mem_d0_out)
   );
 
@@ -264,6 +303,7 @@ module kmeans_k2n2_top #
 
   RAM
   #(
+    .read_f(1'b1),
     .init_file(mem_d1_init_file),
     .write_f(1'b0),
     .depth(n_input_data_b_depth),
@@ -272,21 +312,98 @@ module kmeans_k2n2_top #
   RAM_d1
   (
     .clk(clk),
-    .rd_addr(mem_d1_rd_addr),
+    .rd_addr(data_counter[n_input_data_b_depth-1:0]),
     .out(mem_d1_out)
   );
 
 
-  //kmeans input data memories - end
+  //Sum memories and init memories
+  //d0 init memory
+
+  RAM
+  #(
+    .read_f(1'b0),
+    .write_f(1'b0),
+    .depth(1),
+    .width(1)
+  )
+  RAM_sum_d0_init
+  (
+    .clk(clk),
+    .rd_addr(mem_sum_d0_init_rd_addr),
+    .out(mem_sum_d0_init_out),
+    .wr(mem_sum_d0_init_wr),
+    .wr_addr(mem_sum_d0_init_wr_addr),
+    .wr_data(mem_sum_d0_init_wr_data)
+  );
+
+  //d1 init memory
+
+  RAM
+  #(
+    .read_f(1'b0),
+    .write_f(1'b0),
+    .depth(1),
+    .width(1)
+  )
+  RAM_sum_d1_init
+  (
+    .clk(clk),
+    .rd_addr(mem_sum_d1_init_rd_addr),
+    .out(mem_sum_d1_init_out),
+    .wr(mem_sum_d1_init_wr),
+    .wr_addr(mem_sum_d1_init_wr_addr),
+    .wr_data(mem_sum_d1_init_wr_data)
+  );
+
+  //d0 sum memory
+
+  RAM
+  #(
+    .read_f(1'b0),
+    .write_f(1'b0),
+    .depth(1),
+    .width(acc_sum_width)
+  )
+  RAM_sum_d0
+  (
+    .clk(clk),
+    .rd_addr(mem_sum_d0_rd_addr),
+    .out(mem_sum_d0_out),
+    .wr(mem_sum_d0_wr),
+    .wr_addr(mem_sum_d0_wr_addr),
+    .wr_data(mem_sum_d0_wr_data)
+  );
+
+  //d1 sum memory
+
+  RAM
+  #(
+    .read_f(1'b0),
+    .write_f(1'b0),
+    .depth(1),
+    .width(acc_sum_width)
+  )
+  RAM_sum_d1
+  (
+    .clk(clk),
+    .rd_addr(mem_sum_d1_rd_addr),
+    .out(mem_sum_d1_out),
+    .wr(mem_sum_d1_wr),
+    .wr_addr(mem_sum_d1_wr_addr),
+    .wr_data(mem_sum_d1_wr_data)
+  );
+
 
   //Modules instantiation - end
 
   initial begin
+    kmeans_rst = 0;
     kmeans_rdy = 0;
     acc_rdy = 0;
-    ltcy_counter_rst = 0;
-    ltcy_counter_en = 0;
-    ltcy_counter = 0;
+    class_done = 0;
+    data_counter_en = 0;
+    data_counter = 0;
     k0_0 = 0;
     k0_1 = 0;
     k1_0 = 0;
@@ -318,6 +435,9 @@ module kmeans_k2n2_top #
     kp_st3_k_out = 0;
     mem_sum_init_rst = 0;
     mem_sum_init_rst_wr_addr = 0;
+    bck_rd = 0;
+    bck_rd_addr = 0;
+    fsm_kmeans_control = 0;
   end
 
 
@@ -352,6 +472,7 @@ module RAM #
     end 
   end
 
+    //synthesis translate_off
 
   always @(posedge clk) begin
     if(wr && write_f) begin
@@ -366,6 +487,7 @@ module RAM #
     end 
   end
 
+    //synthesis translate_on
 
 endmodule
 
