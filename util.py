@@ -1,5 +1,33 @@
 from veriloggen import *
 
+
+def create_reduce_tree(n: int):
+    n_st = 0
+    dict_idx = 0
+    final_dict = {}
+    queue = []
+    for i in range(n):
+        queue.append(i)
+
+    while len(queue) > 1:
+        queue_tmp = queue.copy()
+        queue.clear()
+        while queue_tmp:
+            a = queue_tmp.pop(0)
+            b = None
+            if queue_tmp:
+                b = queue_tmp.pop(0)
+
+            if b is None:
+                final_dict[dict_idx] = [n_st, a]
+            else:
+                final_dict[dict_idx] = [n_st, a, b]
+            queue.append(dict_idx)
+            dict_idx += 1
+        n_st += 1
+    return final_dict, n_st
+
+
 def initialize_regs(module: Module, values=None):
     regs = []
     if values is None:

@@ -22,47 +22,12 @@ class KMeans:
         self.dimensions_qty = dimensions_qty
         self.centroids_qty = centroids_qty
         self.centroid_id_width = ceil(log2(self.centroids_qty))
-        self.add_dict, self.add_ltcy = self.find_add_latency()
+        self.add_dict, self.add_ltcy = _u.create_reduce_tree(
+            self.dimensions_qty)
+        self.cmp_dict, self.cmp_ltcy = _u.create_reduce_tree(
+            self.centroids_qty)
 
-        '''
-        mem_d0_init_file = m.Parameter('mem_d0_init_file', './db/d0.txt')
-        mem_d1_init_file = m.Parameter('mem_d1_init_file', './db/d1.txt')
-        data_width = m.Parameter('data_width', 8)
-        n_input_data_b_depth = m.Parameter('n_input_data_b_depth', 8)
-        n_input_data = m.Parameter('n_input_data', 256)
-        acc_sum_width = m.Parameter('acc_sum_width', 8 + ceil(log2(256)))
-        p_k0_0 = m.Parameter('p_k0_0', 0, data_width)
-        p_k0_1 = m.Parameter('p_k0_1', 0, data_width)
-        p_k1_0 = m.Parameter('p_k1_0', 1, data_width)
-        p_k1_1 = m.Parameter('p_k1_1', 1, data_width)'''
         self.cache = {}
-
-    def find_add_latency(self):
-        n = self.dimensions_qty
-        n_st = 0
-        dict_idx = 0
-        final_dict = {}
-        queue = []
-        for i in range(n):
-            queue.append(i)
-
-        while len(queue) > 1:
-            queue_tmp = queue.copy()
-            queue.clear()
-            while queue_tmp:
-                a = queue_tmp.pop(0)
-                b = None
-                if queue_tmp:
-                    b = queue_tmp.pop(0)
-
-                if b is None:
-                    final_dict[dict_idx] = [n_st, a]
-                else:
-                    final_dict[dict_idx] = [n_st, a, b]
-                queue.append(dict_idx)
-                dict_idx += 1
-            n_st += 1
-        return final_dict, n_st
 
     def get(self):
         pass
@@ -89,8 +54,6 @@ class KMeans:
         output_data_vec = []
 
         input_data_width = m.Parameter('input_data_width', input_data_width_v)
-        centroid_id_width = m.Parameter(
-            'centroid_id_width', centroid_id_width_v)
 
         clk = m.Input('clk')
 
@@ -104,11 +67,12 @@ class KMeans:
             input_data_vec.append(m.Input('input_data%d' %
                                   i, input_data_width))
 
+        n = self.dimensions_qty
         for i in range(dimensions_qty_v):
-            output_data_vec.append(m.OutputReg(
+            output_data_vec.append(m.Output(
                 'output_data%d' % i, input_data_width))
 
-        selected_centroid = m.OutputReg('selected_centroid', centroid_id_width)
+        selected_centroid = m.Output('selected_centroid', centroid_id_width_v)
         # latency_delay = m.Output('latency_delay',pipe_latency_delay_with_v)
         m.EmbeddedCode('//Latency delay')
         m.EmbeddedCode(
@@ -116,7 +80,6 @@ class KMeans:
         m.EmbeddedCode('//for this one it is %d' % pipe_latency_delay_v)
 
         # pipes regs
-
         # st0 - sub
         m.EmbeddedCode('\n//pipeline stage 0 - Sub')
         st0_regs_vec = []
@@ -124,7 +87,7 @@ class KMeans:
             st0_regs_vec.append([])
             for j in range(dimensions_qty_v):
                 st0_regs_vec[i].append(m.Reg('sub_k%d_d%d_st0' %
-                                             (i, j), input_data_width_v))
+                                             (i, j), input_data_width))
         # st1 - sqr
         m.EmbeddedCode('\n//pipeline stage 1 - Sqr')
         st1_regs_vec = []
@@ -132,41 +95,68 @@ class KMeans:
             st1_regs_vec.append([])
             for j in range(dimensions_qty_v):
                 st1_regs_vec[i].append(m.Reg('sqr_k%d_d%d_st1' %
-                                             (i, j), input_data_width_v*2))
+                                             (i, j), input_data_width*2))
 
         # st - add reduction
         st_idx = 2
         add_dict = self.add_dict
         add_ltcy = self.add_ltcy
-        add_plus_bits = ceil(log2(add_ltcy))
+        add_plus_bits = ceil(log2(add_ltcy)) + 1
         st_add_vec = []
         m.EmbeddedCode('\n//pipeline Add reduction - %d stages' % add_ltcy)
         m.EmbeddedCode(
-            '//we needed to add %db to the add witdh because we need ceil(log2(reduction_stages)) to don´t have overflow' % add_plus_bits)
+            '//we needed to add %db to the add witdh because we need ceil(log2(reduction_stages)) + 1 to don´t have overflow' % add_plus_bits)
         for i in range(centroids_qty_v):
             add_idx = 0
             st_add_vec.append([])
             for k in add_dict.keys():
                 st_add_vec[i].append(m.Reg('add%d_k%d_st%d' % (
-                    add_idx, i, add_dict[k][0]+st_idx), input_data_width+add_plus_bits))
+                    add_idx, i, add_dict[k][0]+st_idx), input_data_width*2+add_plus_bits))
                 add_idx += 1
 
-        # add reduction pipe(s)
-        # comp tree pipe(s)
+        # st - comp reduction
+        st_idx += add_dict[len(add_dict)-1][0]+1
+        cmp_dict = self.cmp_dict
+        cmp_ltcy = self.cmp_ltcy
+        st_cmp_idx_vec = []
 
-        dinamic_always = m.Always(Posedge(clk))()
+        m.EmbeddedCode(
+            '\n//pipeline comp reduction - %d stages. Centroid idx propagation' % cmp_ltcy)
+        cmp_idx = 0
+        for k in cmp_dict.keys():
+            st_cmp_idx_vec.append(m.Reg('cmp%d_idx_st%d' % (
+                cmp_idx, cmp_dict[k][0]+st_idx), centroid_id_width_v))
+            cmp_idx += 1
+
+        st_cmp_data_vec = []
+        m.EmbeddedCode(
+            '\n//pipeline comp reduction - %d stages. Centroid add reduction propagation' % cmp_ltcy)
+        m.EmbeddedCode(
+            '//The last stage of these regs are only for depuration. When in synthesys they will be automatically removed')
+        cmp_idx = 0
+        for k in cmp_dict.keys():
+            st_cmp_data_vec.append(m.Reg('cmp%d_data_st%d' % (
+                cmp_idx, cmp_dict[k][0]+st_idx), input_data_width*2+add_plus_bits))
+            cmp_idx += 1
+
+        # output assigns
+        m.EmbeddedCode('\n//Output assigns')
+        selected_centroid.assign(st_cmp_idx_vec[-1])
+
+        pipeline_always = m.Always(Posedge(clk))()
         # sub pipe
         for i in range(centroids_qty_v):
             for j in range(dimensions_qty_v):
-                dinamic_always.statement += (st0_regs_vec[i][j]
-                                             (centroids_vec[i][j]-input_data_vec[j]),)
+                pipeline_always.statement += (st0_regs_vec[i][j]
+                                              (centroids_vec[i][j]-input_data_vec[j]),)
 
         # sqr pipe
         for i in range(centroids_qty_v):
             for j in range(dimensions_qty_v):
-                dinamic_always.statement += (st1_regs_vec[i][j](
+                pipeline_always.statement += (st1_regs_vec[i][j](
                     st0_regs_vec[i][j]*st0_regs_vec[i][j]),)
 
+        # add reduction pipe(s)
         for i in range(centroids_qty_v):
             add_idx = 0
             for k in add_dict.keys():
@@ -174,18 +164,110 @@ class KMeans:
                     a = add_dict[k][1]
                     if len(add_dict[k]) > 2:
                         b = add_dict[k][2]
-                        dinamic_always.statement += (st_add_vec[i][add_idx](st1_regs_vec[i][a]+st1_regs_vec[i][b]),)
+                        pipeline_always.statement += (st_add_vec[i][add_idx](
+                            st1_regs_vec[i][a]+st1_regs_vec[i][b]),)
                     else:
-                        dinamic_always.statement += (st_add_vec[i][add_idx](st1_regs_vec[i][a]),)
+                        pipeline_always.statement += (
+                            st_add_vec[i][add_idx](st1_regs_vec[i][a]),)
                 else:
                     a = add_dict[k][1]
                     if len(add_dict[k]) > 2:
                         b = add_dict[k][2]
-                        dinamic_always.statement += (st_add_vec[i][add_idx](st_add_vec[i][a]+st_add_vec[i][b]),)
+                        pipeline_always.statement += (st_add_vec[i][add_idx](
+                            st_add_vec[i][a]+st_add_vec[i][b]),)
                     else:
-                        dinamic_always.statement += (st_add_vec[i][add_idx](st_add_vec[i][a]),)
-                add_idx +=1
-                
+                        pipeline_always.statement += (
+                            st_add_vec[i][add_idx](st_add_vec[i][a]),)
+                add_idx += 1
+
+        # comp tree pipe(s)
+        cmp_idx = 0
+        for k in cmp_dict.keys():
+            if cmp_dict[k][0] == 0:
+                a = cmp_dict[k][1]
+                if len(cmp_dict[k]) > 2:
+                    b = cmp_dict[k][2]
+                    pipeline_always.statement += (
+                        st_cmp_idx_vec[cmp_idx](
+                            Mux(
+                                st_add_vec[a][-1] < st_add_vec[b][-1],
+                                Int(a, centroid_id_width_v, 10),
+                                Int(b, centroid_id_width_v, 10)
+                            )
+                        ),
+                        st_cmp_data_vec[cmp_idx](
+                            Mux(
+                                st_add_vec[a][-1] < st_add_vec[b][-1],
+                                st_add_vec[a][-1],
+                                st_add_vec[b][-1],
+                            )
+                        ),
+                    )
+                else:
+                    pipeline_always.statement += (
+                        st_cmp_idx_vec[cmp_idx](
+                            Int(a, centroid_id_width_v, 10),
+                        ),
+                        st_cmp_data_vec[cmp_idx](
+                            st_add_vec[a][-1],
+                        ),
+                    )
+            else:
+                a = cmp_dict[k][1]
+                if len(cmp_dict[k]) > 2:
+                    b = cmp_dict[k][2]
+                    pipeline_always.statement += (
+                        st_cmp_idx_vec[cmp_idx](
+                            Mux(
+                                st_cmp_data_vec[a] < st_cmp_data_vec[b],
+                                st_cmp_idx_vec[a],
+                                st_cmp_idx_vec[b]
+                            )
+                        ),
+                        st_cmp_data_vec[cmp_idx](
+                            Mux(
+                                st_cmp_data_vec[a] < st_cmp_data_vec[b],
+                                st_cmp_data_vec[a],
+                                st_cmp_data_vec[b]
+                            )
+                        ),
+                    )
+                else:
+                    pipeline_always.statement += (
+                        st_cmp_idx_vec[cmp_idx](
+                            st_cmp_idx_vec[a]
+                        ),
+                        st_cmp_data_vec[cmp_idx](
+                            st_cmp_data_vec[a],
+                        ),
+                    )
+            cmp_idx += 1
+
+        # Input data propagation pipeline
+        m.EmbeddedCode('\n//Input data propagation pipeline')
+        data_prop_vec = []
+        for i in range(pipe_latency_delay_v):
+            data_prop_vec.append([])
+            for d in range(dimensions_qty_v):
+                data_prop_vec[i].append(
+                    m.Reg('data_prop_d%d_st%d' % (d, i), input_data_width))
+
+        # output assigns
+        m.EmbeddedCode('\n//Output assigns')
+        for d in range(dimensions_qty_v):
+            output_data_vec[d].assign(data_prop_vec[-1][d])
+
+        data_always = m.Always(Posedge(clk))()
+        # Input data propagation pipeline
+        for i in range(pipe_latency_delay_v):
+            for d in range(dimensions_qty_v):
+                if i == 0:
+                    data_always.statement += (
+                        data_prop_vec[i][d](input_data_vec[d]),)
+                else:
+                    pass
+                    data_always.statement += (
+                        data_prop_vec[i][d](data_prop_vec[i-1][d]),)
 
         _u.initialize_regs(m)
         return m
@@ -684,9 +766,10 @@ class KMeans:
         # print(rslt)
 
 
-k = KMeans(centroids_qty=3, dimensions_qty=5)
-# k.create_kmeans_top().to_verilog('./verilog/kmeans_top.v')
-# k.create_kmeans_testbench()
-kmeans_pipeline = k.create_kmeans_pipeline()
-#kmeans_pipeline.to_verilog('./verilog/pipeline.v')
-kmeans_pipeline.to_verilog('./verilog/%s.v' % kmeans_pipeline.name)
+# kmeans_pipeline.to_verilog('./verilog/pipeline.v')
+
+for k in range(2, 4):
+    for d in range(2, 6):
+        km = KMeans(centroids_qty=k, dimensions_qty=d)
+        kmeans_pipeline = km.create_kmeans_pipeline()
+        kmeans_pipeline.to_verilog('./verilog/%s.v' % kmeans_pipeline.name)
