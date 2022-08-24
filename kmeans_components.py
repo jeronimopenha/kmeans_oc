@@ -1,3 +1,7 @@
+from ast import Pow
+from pickle import EMPTY_LIST
+from queue import Empty
+from re import A
 from veriloggen import *
 from math import ceil, log2
 import util as _u
@@ -8,15 +12,183 @@ class KMeans:
 
     def __init__(
             self,
-            d_bits: int = 16,
-            n_data: int = 256
+            input_data_width: int = 16,
+            input_data_qty: int = 256,
+            dimensions_qty: int = 2,
+            centroids_qty: int = 2
     ):
-        self.d_bits = d_bits
-        self.n_data = n_data
+        self.input_data_width = input_data_width
+        self.input_data_qty = input_data_qty
+        self.dimensions_qty = dimensions_qty
+        self.centroids_qty = centroids_qty
+        self.centroid_id_width = ceil(log2(self.centroids_qty))
+        self.add_dict, self.add_ltcy = self.find_add_latency()
+
+        '''
+        mem_d0_init_file = m.Parameter('mem_d0_init_file', './db/d0.txt')
+        mem_d1_init_file = m.Parameter('mem_d1_init_file', './db/d1.txt')
+        data_width = m.Parameter('data_width', 8)
+        n_input_data_b_depth = m.Parameter('n_input_data_b_depth', 8)
+        n_input_data = m.Parameter('n_input_data', 256)
+        acc_sum_width = m.Parameter('acc_sum_width', 8 + ceil(log2(256)))
+        p_k0_0 = m.Parameter('p_k0_0', 0, data_width)
+        p_k0_1 = m.Parameter('p_k0_1', 0, data_width)
+        p_k1_0 = m.Parameter('p_k1_0', 1, data_width)
+        p_k1_1 = m.Parameter('p_k1_1', 1, data_width)'''
         self.cache = {}
+
+    def find_add_latency(self):
+        n = self.dimensions_qty
+        n_st = 0
+        dict_idx = 0
+        final_dict = {}
+        queue = []
+        for i in range(n):
+            queue.append(i)
+
+        while len(queue) > 1:
+            queue_tmp = queue.copy()
+            queue.clear()
+            while queue_tmp:
+                a = queue_tmp.pop(0)
+                b = None
+                if queue_tmp:
+                    b = queue_tmp.pop(0)
+
+                if b is None:
+                    final_dict[dict_idx] = [n_st, a]
+                else:
+                    final_dict[dict_idx] = [n_st, a, b]
+                queue.append(dict_idx)
+                dict_idx += 1
+            n_st += 1
+        return final_dict, n_st
 
     def get(self):
         pass
+
+    def create_kmeans_pipeline(self):
+        input_data_width_v = self.input_data_width
+        input_data_qty_v = self.input_data_qty
+        dimensions_qty_v = self.dimensions_qty
+        centroids_qty_v = self.centroids_qty
+        centroid_id_width_v = self.centroid_id_width
+        # 1 - sub, 1 - sqr, ceil(log2(dimensions_qty)) add, ceil(log2(centroids_qty)) comp
+        pipe_latency_delay_v = 1+1 + \
+            ceil(log2(dimensions_qty_v)) + ceil(log2(centroids_qty_v))
+        pipe_latency_delay_with_v = ceil(log2(pipe_latency_delay_v))
+
+        name = 'kmeans_pipeline_k%d_d%d' % (centroids_qty_v, dimensions_qty_v)
+        if name in self.cache.keys():
+            return self.cache[name]
+
+        m = Module(name)
+
+        centroids_vec = []
+        input_data_vec = []
+        output_data_vec = []
+
+        input_data_width = m.Parameter('input_data_width', input_data_width_v)
+        centroid_id_width = m.Parameter(
+            'centroid_id_width', centroid_id_width_v)
+
+        clk = m.Input('clk')
+
+        for i in range(centroids_qty_v):
+            centroids_vec.append([])
+            for j in range(dimensions_qty_v):
+                centroids_vec[i].append(
+                    m.Input('centroid%d_d%d' % (i, j), input_data_width))
+
+        for i in range(dimensions_qty_v):
+            input_data_vec.append(m.Input('input_data%d' %
+                                  i, input_data_width))
+
+        for i in range(dimensions_qty_v):
+            output_data_vec.append(m.OutputReg(
+                'output_data%d' % i, input_data_width))
+
+        selected_centroid = m.OutputReg('selected_centroid', centroid_id_width)
+        # latency_delay = m.Output('latency_delay',pipe_latency_delay_with_v)
+        m.EmbeddedCode('//Latency delay')
+        m.EmbeddedCode(
+            '//1(sub) + 1(sqr) + ceil(log2(dimensions_qty)) (add) + ceil(log2(centroids_qty)) (comp)')
+        m.EmbeddedCode('//for this one it is %d' % pipe_latency_delay_v)
+
+        # pipes regs
+
+        # st0 - sub
+        m.EmbeddedCode('\n//pipeline stage 0 - Sub')
+        st0_regs_vec = []
+        for i in range(centroids_qty_v):
+            st0_regs_vec.append([])
+            for j in range(dimensions_qty_v):
+                st0_regs_vec[i].append(m.Reg('sub_k%d_d%d_st0' %
+                                             (i, j), input_data_width_v))
+        # st1 - sqr
+        m.EmbeddedCode('\n//pipeline stage 1 - Sqr')
+        st1_regs_vec = []
+        for i in range(centroids_qty_v):
+            st1_regs_vec.append([])
+            for j in range(dimensions_qty_v):
+                st1_regs_vec[i].append(m.Reg('sqr_k%d_d%d_st1' %
+                                             (i, j), input_data_width_v*2))
+
+        # st - add reduction
+        st_idx = 2
+        add_dict = self.add_dict
+        add_ltcy = self.add_ltcy
+        add_plus_bits = ceil(log2(add_ltcy))
+        st_add_vec = []
+        m.EmbeddedCode('\n//pipeline Add reduction - %d stages' % add_ltcy)
+        m.EmbeddedCode(
+            '//we needed to add %db to the add witdh because we need ceil(log2(reduction_stages)) to don´t have overflow' % add_plus_bits)
+        for i in range(centroids_qty_v):
+            add_idx = 0
+            st_add_vec.append([])
+            for k in add_dict.keys():
+                st_add_vec[i].append(m.Reg('add%d_k%d_st%d' % (
+                    add_idx, i, add_dict[k][0]+st_idx), input_data_width+add_plus_bits))
+                add_idx += 1
+
+        # add reduction pipe(s)
+        # comp tree pipe(s)
+
+        dinamic_always = m.Always(Posedge(clk))()
+        # sub pipe
+        for i in range(centroids_qty_v):
+            for j in range(dimensions_qty_v):
+                dinamic_always.statement += (st0_regs_vec[i][j]
+                                             (centroids_vec[i][j]-input_data_vec[j]),)
+
+        # sqr pipe
+        for i in range(centroids_qty_v):
+            for j in range(dimensions_qty_v):
+                dinamic_always.statement += (st1_regs_vec[i][j](
+                    st0_regs_vec[i][j]*st0_regs_vec[i][j]),)
+
+        for i in range(centroids_qty_v):
+            add_idx = 0
+            for k in add_dict.keys():
+                if add_dict[k][0] == 0:
+                    a = add_dict[k][1]
+                    if len(add_dict[k]) > 2:
+                        b = add_dict[k][2]
+                        dinamic_always.statement += (st_add_vec[i][add_idx](st1_regs_vec[i][a]+st1_regs_vec[i][b]),)
+                    else:
+                        dinamic_always.statement += (st_add_vec[i][add_idx](st1_regs_vec[i][a]),)
+                else:
+                    a = add_dict[k][1]
+                    if len(add_dict[k]) > 2:
+                        b = add_dict[k][2]
+                        dinamic_always.statement += (st_add_vec[i][add_idx](st_add_vec[i][a]+st_add_vec[i][b]),)
+                    else:
+                        dinamic_always.statement += (st_add_vec[i][add_idx](st_add_vec[i][a]),)
+                add_idx +=1
+                
+
+        _u.initialize_regs(m)
+        return m
 
     def create_RAM(self) -> Module:
         name = 'RAM'
@@ -507,11 +679,14 @@ class KMeans:
         m.EmbeddedCode("always #5clk=~clk;")
 
         m.to_verilog(os.getcwd() + "/verilog/testbench_kmeans_k2s2.v")
-        #sim = simulation.Simulator(m, sim="iverilog")
+        # sim = simulation.Simulator(m, sim="iverilog")
         # rslt = sim.run()
         # print(rslt)
 
 
-k = KMeans()
-#k.create_kmeans_top().to_verilog('./verilog/kmeans_top.v')
-k.create_kmeans_testbench()
+k = KMeans(centroids_qty=3, dimensions_qty=5)
+# k.create_kmeans_top().to_verilog('./verilog/kmeans_top.v')
+# k.create_kmeans_testbench()
+kmeans_pipeline = k.create_kmeans_pipeline()
+#kmeans_pipeline.to_verilog('./verilog/pipeline.v')
+kmeans_pipeline.to_verilog('./verilog/%s.v' % kmeans_pipeline.name)
