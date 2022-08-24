@@ -157,9 +157,10 @@ class KMeans:
                     st0_regs_vec[i][j]*st0_regs_vec[i][j]),)
 
         # add reduction pipe(s)
-        for i in range(centroids_qty_v):
-            add_idx = 0
-            for k in add_dict.keys():
+        add_idx = 0
+        for k in add_dict.keys():
+            
+            for i in range(centroids_qty_v):    
                 if add_dict[k][0] == 0:
                     a = add_dict[k][1]
                     if len(add_dict[k]) > 2:
@@ -178,7 +179,7 @@ class KMeans:
                     else:
                         pipeline_always.statement += (
                             st_add_vec[i][add_idx](st_add_vec[i][a]),)
-                add_idx += 1
+            add_idx += 1
 
         # comp tree pipe(s)
         cmp_idx = 0

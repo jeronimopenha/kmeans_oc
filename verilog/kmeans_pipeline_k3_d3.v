@@ -96,13 +96,13 @@ module kmeans_pipeline_k3_d3 #
     sqr_k2_d1_st1 <= sub_k2_d1_st0 * sub_k2_d1_st0;
     sqr_k2_d2_st1 <= sub_k2_d2_st0 * sub_k2_d2_st0;
     add0_k0_st2 <= sqr_k0_d0_st1 + sqr_k0_d1_st1;
-    add1_k0_st2 <= sqr_k0_d2_st1;
-    add2_k0_st3 <= add0_k0_st2 + add1_k0_st2;
     add0_k1_st2 <= sqr_k1_d0_st1 + sqr_k1_d1_st1;
-    add1_k1_st2 <= sqr_k1_d2_st1;
-    add2_k1_st3 <= add0_k1_st2 + add1_k1_st2;
     add0_k2_st2 <= sqr_k2_d0_st1 + sqr_k2_d1_st1;
+    add1_k0_st2 <= sqr_k0_d2_st1;
+    add1_k1_st2 <= sqr_k1_d2_st1;
     add1_k2_st2 <= sqr_k2_d2_st1;
+    add2_k0_st3 <= add0_k0_st2 + add1_k0_st2;
+    add2_k1_st3 <= add0_k1_st2 + add1_k1_st2;
     add2_k2_st3 <= add0_k2_st2 + add1_k2_st2;
     cmp0_idx_st4 <= (add2_k0_st3 < add2_k1_st3)? 2'd0 : 2'd1;
     cmp0_data_st4 <= (add2_k0_st3 < add2_k1_st3)? add2_k0_st3 : add2_k1_st3;
