@@ -12,13 +12,14 @@ class KMeans:
 
     def __init__(
             self,
-            input_data_width: int = 16,
+            input_data_width: int = 8,
             input_data_qty: int = 256,
             dimensions_qty: int = 2,
             centroids_qty: int = 2
     ):
         self.input_data_width = input_data_width
         self.input_data_qty = input_data_qty
+        self.input_data_qty_width = ceil(log2(self.input_data_qty))
         self.dimensions_qty = dimensions_qty
         self.centroids_qty = centroids_qty
         self.centroid_id_width = ceil(log2(self.centroids_qty))
@@ -32,6 +33,105 @@ class KMeans:
     def get(self):
         pass
 
+    def create_ram(self) -> Module:
+        name = 'RAM'
+        if name in self.cache.keys():
+            return self.cache[name]
+
+        m = Module(name)
+        read_f = m.Parameter('read_f', 0)
+        init_file = m.Parameter('init_file', 'mem_file.txt')
+        write_f = m.Parameter('write_f', 0)
+        output_file = m.Parameter('output_file', 'mem_out_file.txt')
+        depth = m.Parameter('depth', 8)
+        width = m.Parameter('width', 16)
+
+        clk = m.Input('clk')
+        # rd = m.Input('rd')
+        rd_addr = m.Input('rd_addr', depth)
+        out = m.Output('out', width)
+
+        wr = m.Input('wr')
+        wr_addr = m.Input('wr_addr', depth)
+        wr_data = m.Input('wr_data', width)
+
+        mem = m.Reg('mem', width, Power(2, depth))
+
+        out.assign(mem[rd_addr])
+
+        m.Always(Posedge(clk))(
+            If(wr)(
+                mem[wr_addr](wr_data)
+            ),
+        )
+
+        m.EmbeddedCode('  //synthesis translate_off')
+        m.Always(Posedge(clk))(
+            If(AndList(wr, write_f))(
+                Systask('writememh', output_file, mem)
+            ),
+        )
+
+        m.Initial(
+            If(read_f)(
+                Systask('readmemh', init_file, mem),
+            )
+        )
+        m.EmbeddedCode('  //synthesis translate_on')
+
+        self.cache[name] = m
+        return m
+
+    def create_kmeans_input_data_block(self):
+        dimensions_qty_v = self.dimensions_qty
+        input_data_width_v = self.input_data_width
+        input_data_qty_width_v = self.input_data_qty_width
+
+        name = 'kmeans_input_data_block_%ddim' % dimensions_qty_v
+        if name in self.cache.keys():
+            return self.cache[name]
+
+        m = Module(name)
+
+        input_data_width = m.Parameter('input_data_width', input_data_width_v)
+        memory_depth_bits = m.Parameter(
+            'memory_depth_bits', input_data_qty_width_v)
+        mem_init_file_par_vec = []
+        for d in range(dimensions_qty_v):
+            mem_init_file_par_vec.append(m.Parameter(
+                'mem_d%d_init_file' % d, './db/d%d.txt' % d))
+
+        clk = m.Input('clk')
+        rd_address = m.Input('rd_address',memory_depth_bits)
+        output_data = []
+        for d in range(dimensions_qty_v):
+            output_data.append(m.Output('output_data%d' %
+                               d, input_data_width))
+
+        aux = self.create_ram()
+        for d in range(dimensions_qty_v):
+            par = [
+                ('read_f', 1),
+                ('init_file', mem_init_file_par_vec[d]),
+                ('write_f', 0),
+                ('output_file', 'mem_out_file.txt'),
+                ('depth', memory_depth_bits),
+                ('width', input_data_width),
+            ]
+            con = [
+                ('clk', clk),
+                ('rd_addr', rd_address),
+                ('out', output_data[d]),
+                ('wr', Int(0, 1, 10)),
+                ('wr_addr', Int(0, input_data_qty_width_v, 10)),
+                ('wr_data', Int(0, input_data_width_v, 10)),
+            ]
+            m.Instance(aux, '%s_%d' % (aux.name, d), par, con)
+        
+        _u.initialize_regs(m)
+        self.cache[name] = m
+        return m
+
     def create_kmeans_pipeline(self):
         input_data_width_v = self.input_data_width
         input_data_qty_v = self.input_data_qty
@@ -41,7 +141,7 @@ class KMeans:
         # 1 - sub, 1 - sqr, ceil(log2(dimensions_qty)) add, ceil(log2(centroids_qty)) comp
         pipe_latency_delay_v = 1+1 + \
             ceil(log2(dimensions_qty_v)) + ceil(log2(centroids_qty_v))
-        pipe_latency_delay_with_v = ceil(log2(pipe_latency_delay_v))
+        pipe_latency_delay_width_v = ceil(log2(pipe_latency_delay_v))
 
         name = 'kmeans_pipeline_k%d_d%d' % (centroids_qty_v, dimensions_qty_v)
         if name in self.cache.keys():
@@ -159,8 +259,8 @@ class KMeans:
         # add reduction pipe(s)
         add_idx = 0
         for k in add_dict.keys():
-            
-            for i in range(centroids_qty_v):    
+
+            for i in range(centroids_qty_v):
                 if add_dict[k][0] == 0:
                     a = add_dict[k][1]
                     if len(add_dict[k]) > 2:
@@ -273,77 +373,47 @@ class KMeans:
         _u.initialize_regs(m)
         return m
 
-    def create_RAM(self) -> Module:
-        name = 'RAM'
-        if name in self.cache.keys():
-            return self.cache[name]
-
-        m = Module(name)
-        read_f = m.Parameter('read_f', 0)
-        init_file = m.Parameter('init_file', 'mem_file.txt')
-        write_f = m.Parameter('write_f', 0)
-        output_file = m.Parameter('output_file', 'mem_out_file.txt')
-        depth = m.Parameter('depth', 8)
-        width = m.Parameter('width', 16)
-
-        clk = m.Input('clk')
-        # rd = m.Input('rd')
-        rd_addr = m.Input('rd_addr', depth)
-        out = m.Output('out', width)
-
-        wr = m.Input('wr')
-        wr_addr = m.Input('wr_addr', depth)
-        wr_data = m.Input('wr_data', width)
-
-        mem = m.Reg('mem', width, Power(2, depth))
-
-        out.assign(mem[rd_addr])
-
-        m.Always(Posedge(clk))(
-            If(wr)(
-                mem[wr_addr](wr_data)
-            ),
-        )
-
-        m.EmbeddedCode('  //synthesis translate_off')
-        m.Always(Posedge(clk))(
-            If(AndList(wr, write_f))(
-                Systask('writememh', output_file, mem)
-            ),
-        )
-
-        m.Initial(
-            If(read_f)(
-                Systask('readmemh', init_file, mem),
-            )
-        )
-        m.EmbeddedCode('  //synthesis translate_on')
-
-        self.cache[name] = m
-        return m
-
     def create_kmeans_top(self):
-        name = 'kmeans_k2n2_top'
+        input_data_width_v = self.input_data_width
+        input_data_qty_v = self.input_data_qty
+        dimensions_qty_v = self.dimensions_qty
+        centroids_qty_v = self.centroids_qty
+        centroid_id_width_v = self.centroid_id_width
+        # latency 1 - sub, 1 - sqr, ceil(log2(dimensions_qty)) add, ceil(log2(centroids_qty)) comp
+        pipe_latency_delay_v = 1+1 + \
+            ceil(log2(dimensions_qty_v)) + ceil(log2(centroids_qty_v))
+        pipe_latency_delay_width_v = ceil(log2(pipe_latency_delay_v))
+
+        name = 'kmeans_k%dn%d_top' % (centroids_qty_v, dimensions_qty_v)
         if name in self.cache.keys():
             return self.cache[name]
 
         m = Module(name)
 
-        mem_d0_init_file = m.Parameter('mem_d0_init_file', './db/d0.txt')
-        mem_d1_init_file = m.Parameter('mem_d1_init_file', './db/d1.txt')
+        # parameters for data input for each dimensions
         data_width = m.Parameter('data_width', 8)
-        n_input_data_b_depth = m.Parameter('n_input_data_b_depth', 8)
-        n_input_data = m.Parameter('n_input_data', 256)
-        acc_sum_width = m.Parameter('acc_sum_width', 8 + ceil(log2(256)))
-        p_k0_0 = m.Parameter('p_k0_0', 0, data_width)
-        p_k0_1 = m.Parameter('p_k0_1', 0, data_width)
-        p_k1_0 = m.Parameter('p_k1_0', 1, data_width)
-        p_k1_1 = m.Parameter('p_k1_1', 1, data_width)
+        input_data_qty_bit_width = m.Parameter('input_data_qty_bit_width', 8)
+        input_data_qty = m.Parameter('input_data_qty', 256)
+        mem_init_file_par_vec = []
+        for d in range(dimensions_qty_v):
+            mem_init_file_par_vec.append(m.Parameter(
+                'mem_d%d_init_file' % d, './db/d%d.txt' % d))
+        k_init_vec = []
+        for k in range(centroids_qty_v):
+            for d in range(dimensions_qty_v):
+                k_init_vec.append(m.Parameter('k%d_d%d_initial' % (k, d), k))
 
         clk = m.Input('clk')
         rst = m.Input('rst')
         start = m.Input('start')
 
+        # Input data memories
+
+        _u.initialize_regs(m)
+        self.cache[name] = m
+        return m
+
+        '''
         m.EmbeddedCode('\n//control regs and wires - begin')
         kmeans_rst = m.Reg('kmeans_rst')
         kmeans_rdy = m.Reg('kmeans_rdy')
@@ -710,11 +780,7 @@ class KMeans:
         ]
         m.Instance(aux, '%s_sum_d1' % aux.name, par, con)
 
-        m.EmbeddedCode('\n//Modules instantiation - end')
-
-        _u.initialize_regs(m)
-        self.cache[name] = m
-        return m
+        m.EmbeddedCode('\n//Modules instantiation - end')'''
 
     def create_kmeans_testbench(self) -> str:
         name = "testbench_kmeans_k2s2"
@@ -772,5 +838,8 @@ class KMeans:
 for k in range(2, 4):
     for d in range(2, 6):
         km = KMeans(centroids_qty=k, dimensions_qty=d)
-        kmeans_pipeline = km.create_kmeans_pipeline()
-        kmeans_pipeline.to_verilog('./verilog/%s.v' % kmeans_pipeline.name)
+        kmeans_top = km.create_kmeans_top()
+        kmeans_top.to_verilog('./verilog/%s.v' % kmeans_top.name)
+        print(km.create_kmeans_input_data_block().to_verilog())
+        # kmeans_pipeline = km.create_kmeans_pipeline()
+        # kmeans_pipeline.to_verilog('./verilog/%s.v' % kmeans_pipeline.name)
