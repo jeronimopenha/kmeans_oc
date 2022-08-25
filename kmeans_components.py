@@ -102,7 +102,7 @@ class KMeans:
                 'mem_d%d_init_file' % d, './db/d%d.txt' % d))
 
         clk = m.Input('clk')
-        rd_address = m.Input('rd_address',memory_depth_bits)
+        rd_address = m.Input('rd_address', memory_depth_bits)
         output_data = []
         for d in range(dimensions_qty_v):
             output_data.append(m.Output('output_data%d' %
@@ -127,7 +127,7 @@ class KMeans:
                 ('wr_data', Int(0, input_data_width_v, 10)),
             ]
             m.Instance(aux, '%s_%d' % (aux.name, d), par, con)
-        
+
         _u.initialize_regs(m)
         self.cache[name] = m
         return m
@@ -391,7 +391,7 @@ class KMeans:
         m = Module(name)
 
         # parameters for data input for each dimensions
-        data_width = m.Parameter('data_width', 8)
+        input_data_width = m.Parameter('input_data_width', 8)
         input_data_qty_bit_width = m.Parameter('input_data_qty_bit_width', 8)
         input_data_qty = m.Parameter('input_data_qty', 256)
         mem_init_file_par_vec = []
@@ -407,8 +407,79 @@ class KMeans:
         rst = m.Input('rst')
         start = m.Input('start')
 
-        # Input data memories
+        # Centroids registers
+        m.EmbeddedCode('\n//Centroids regs')
+        centroids_rgs_vec = []
+        for k in range(centroids_qty_v):
+            centroids_rgs_vec.append([])
+            for d in range(dimensions_qty_v):
+                centroids_rgs_vec[k].append(
+                    m.Reg('k%dd%d' % (k, d), input_data_width))
+        m.EmbeddedCode('\n//New centroids regs')
+        new_centroids_rgs_vec = []
+        for k in range(centroids_qty_v):
+            new_centroids_rgs_vec.append([])
+            for d in range(dimensions_qty_v):
+                new_centroids_rgs_vec[k].append(
+                    m.Reg('new_k%dd%d' % (k, d), input_data_width))
 
+        # Input data memories
+        m.EmbeddedCode('\n//Input data block')
+        m.EmbeddedCode(
+            '\n//In this block we have N RAM memories. Each one contains data for one dimension')
+
+        input_ram_rd_address = m.Wire(
+            'input_ram_rd_address', input_data_qty_bit_width)
+        data_vec = []
+        for d in range(dimensions_qty_v):
+            data_vec.append(m.Wire('d%d' % d, input_data_width))
+
+        aux = self.create_kmeans_input_data_block()
+        par = [
+            ('input_data_width', input_data_width),
+            ('memory_depth_bits', input_data_qty_bit_width)
+        ]
+        for d in range(dimensions_qty_v):
+            par.append(('mem_d%d_init_file' % d, mem_init_file_par_vec[d]),)
+
+        con = [
+            ('clk', clk),
+            ('rd_address', input_ram_rd_address)
+        ]
+        for d in range(dimensions_qty_v):
+            con.append(('output_data%d' % d, data_vec[d]),)
+
+        m.Instance(aux, aux.name, par, con)
+
+        # Kmeans main pipeline
+        m.EmbeddedCode('\n//kmeans main pipeline')
+
+        d_to_acc_vec = []
+        for d in range(dimensions_qty_v):
+            d_to_acc_vec.append(m.Wire('d%d_to_acc' % d, input_data_width))
+
+        selected_centroid = m.Wire('selected_centroid', centroid_id_width_v)
+
+        '''
+        n = self.dimensions_qty
+        for i in range(dimensions_qty_v):
+            output_data_vec.append(m.Output(
+                'output_data%d' % i, input_data_width))
+
+        '''
+        aux = self.create_kmeans_pipeline()
+        par = []
+        con = [
+            ('clk', clk)
+        ]
+        for k in range(centroids_qty_v):
+            for d in range(dimensions_qty_v):
+                con.append(('centroid%d_d%d' %
+                           (k, d), centroids_rgs_vec[k][d]),)
+        for d in range(dimensions_qty_v):
+            con.append(('input_data%d' % d, data_vec[d]),)
+
+        m.Instance(aux, aux.name, par, con)
         _u.initialize_regs(m)
         self.cache[name] = m
         return m
@@ -840,6 +911,6 @@ for k in range(2, 4):
         km = KMeans(centroids_qty=k, dimensions_qty=d)
         kmeans_top = km.create_kmeans_top()
         kmeans_top.to_verilog('./verilog/%s.v' % kmeans_top.name)
-        print(km.create_kmeans_input_data_block().to_verilog())
+        # print(km.create_kmeans_input_data_block().to_verilog())
         # kmeans_pipeline = km.create_kmeans_pipeline()
         # kmeans_pipeline.to_verilog('./verilog/%s.v' % kmeans_pipeline.name)
