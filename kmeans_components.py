@@ -33,7 +33,7 @@ class KMeans:
     def get(self):
         pass
 
-    def create_ram(self) -> Module:
+    def create_ram_memory(self) -> Module:
         name = 'RAM'
         if name in self.cache.keys():
             return self.cache[name]
@@ -108,7 +108,7 @@ class KMeans:
             output_data.append(m.Output('output_data%d' %
                                d, input_data_width))
 
-        aux = self.create_ram()
+        aux = self.create_ram_memory()
         for d in range(dimensions_qty_v):
             par = [
                 ('read_f', 1),
@@ -373,9 +373,180 @@ class KMeans:
         _u.initialize_regs(m)
         return m
 
+    def create_kmeans_acc_block(self):
+        input_data_width_v = self.input_data_width
+        input_data_qty_v = self.input_data_qty
+        input_data_qty_width_v = self.input_data_qty_width
+        dimensions_qty_v = self.dimensions_qty
+        centroids_qty_v = self.centroids_qty
+        centroid_id_width_v = self.centroid_id_width
+
+        name = 'kmeans_acc_block_k%dn%d' % (centroids_qty_v, dimensions_qty_v)
+        if name in self.cache.keys():
+            return self.cache[name]
+
+        m = Module(name)
+
+        input_data_width = m.Parameter('input_data_width', input_data_width_v)
+        input_data_qty_bit_width = m.Parameter(
+            'input_data_qty_bit_width', input_data_qty_width_v)
+        acc_width = m.Parameter(
+            'acc_width', input_data_width_v + ceil(log2(input_data_qty_v)))
+
+        clk = m.Input('clk')
+        rst = m.Input('rst')
+        acc_enable = m.Input('acc_enable')
+
+        d_to_acc_vec = [] = []
+        for d in range(dimensions_qty_v):
+            d_to_acc_vec.append(
+                m.Input('d%d_to_acc' % d, input_data_width))
+        selected_centroid = m.Input('selected_centroid', centroid_id_width_v)
+
+        rd_acc_en = m.Input('rd_acc_en')
+        rd_acc_centroid = m.Input('rd_acc_centroid', centroid_id_width_v)
+        centroid_output = m.OutputReg('centroid_output', centroid_id_width_v)
+        acc_output_vec = []
+        for d in range(dimensions_qty_v):
+            acc_output_vec.append(
+                m.Output('acc%d_output' % d, acc_width))
+        acc_counter_output = m.Output('acc_counter_output', input_data_qty_bit_width)
+
+        # counters for each centroid acc data
+        m.EmbeddedCode('\n//counters for each centroid')
+        centroid_counters = m.Reg(
+            'centroid_counter', input_data_qty_bit_width, centroids_qty_v)
+        #centroid_counter_vec = []
+        # for d in range(centroids_qty_v):
+        #    centroid_counter_vec.append(
+        #        m.Reg('k%d_counter' % d, input_data_qty_bit_width))
+
+        # Memories valid content register flag
+        m.EmbeddedCode('\n//Memories valid content register flag')
+        acc_valid_content_vec = []
+        for d in range(dimensions_qty_v):
+            acc_valid_content_vec.append(
+                m.Reg('acc%d_valid_content' % d, centroids_qty_v))
+
+        # Memories wires and regs
+        m.EmbeddedCode('\n//Memories wires and regs')
+
+        mem_acc_rd_addr = m.Wire('mem_acc_rd_addr', centroid_id_width_v)
+        mem_acc_out_vec = []
+        for d in range(dimensions_qty_v):
+            mem_acc_out_vec.append(
+                m.Wire('mem_acc_%d_out' % d, acc_width),)
+        mem_acc_wr_vec = []
+        for d in range(dimensions_qty_v):
+            mem_acc_wr_vec.append(m.Wire('mem_acc_%d_wr' % d))
+        mem_acc_wr_addr_vec = []
+        for d in range(dimensions_qty_v):
+            mem_acc_wr_addr_vec.append(
+                m.Wire('mem_acc%d_wr_addr' % d, centroid_id_width_v))
+        mem_acc_wr_data_vec = []
+        for d in range(dimensions_qty_v):
+            mem_acc_wr_data_vec.append(
+                m.Wire('mem_acc%d_wr_data' % d, acc_width))
+
+        # Assigns to control the read and write acc logic
+        # First the read conditions:
+        # If we are accumulating, so we read the memory, add the input content to the memory content
+        # If we are reading the ACC, we need to have authority to read withot interference of the pipeline
+        # selected centroid input
+
+        m.EmbeddedCode('\n//Assigns to control the read and write acc logic')
+        m.EmbeddedCode('//First the read conditions:')
+        m.EmbeddedCode(
+            '//If we are accumulating, we need to read the memory, add the input content to the memory content if it is valid')
+        m.EmbeddedCode(
+            '//If we are reading the ACC, we need to have authority to read with no interference from the pipeline`s')
+        m.EmbeddedCode('//selected centroid input')
+        mem_acc_rd_addr.assign(
+            Mux(rd_acc_en, rd_acc_centroid, selected_centroid))
+
+        # The write enable signal is controled by the input "acc_enable"
+        m.EmbeddedCode(
+            '\n//The write enable signal is controled by the input "acc_enable"')
+        for d in range(dimensions_qty_v):
+            mem_acc_wr_vec[d].assign(acc_enable)
+
+        # The write address is the number of selected centroid given by the "selected_centroid" input signal
+        m.EmbeddedCode(
+            '\n//The write address is the number of selected centroid given by the "selected_centroid" input signal')
+        for d in range(dimensions_qty_v):
+            mem_acc_wr_addr_vec[d].assign(selected_centroid)
+
+        # Next the write data is the sum of the memory content + input data for each memory if the memory is initialized.
+        m.EmbeddedCode(
+            '\n//Next the write data is the sum of the memory content + input data for each memory if the memory is initialized.')
+        for d in range(dimensions_qty_v):
+            mem_acc_wr_data_vec[d].assign(
+                Mux(acc_valid_content_vec[d][selected_centroid], d_to_acc_vec[d] + mem_acc_out_vec[d], d_to_acc_vec[d]))
+
+        # Output data assigns
+        m.EmbeddedCode('\n//Output data assigns')
+        for d in range(dimensions_qty_v):
+            acc_output_vec[d].assign(mem_acc_out_vec[d])
+
+        # Resetting the ACC contents and updating it`s bits when a data is written in memory
+        m.EmbeddedCode(
+            '\n//Resetting the ACC contents and updating it`s bits when a data is written in memory')
+        content_always = m.Always(Posedge(clk))
+        content_rst_if = If(rst)().Elif(acc_enable)()
+        for d in range(dimensions_qty_v):
+            content_rst_if.true_statement += (acc_valid_content_vec[d](0),)
+            content_rst_if.next_call.true_statement += (
+                acc_valid_content_vec[d][selected_centroid](1),)
+        content_always.set_statement(content_rst_if)
+
+        # Output counter assigns
+        m.EmbeddedCode('\n//Output counter assigns')
+        acc_counter_output.assign(centroid_counters[rd_acc_centroid])
+        
+        # Resetting the centroids counters and updating them when a data is written in a centroid line
+        m.EmbeddedCode(
+            '\n//Resetting the centroids counters and updating them when a data is written in a centroid line')
+        counter_always = m.Always(Posedge(clk))
+        counter_rst_if = If(rst)().Elif(acc_enable)()
+
+        for k in range(centroids_qty_v):
+            counter_rst_if.true_statement += (centroid_counters[k](0),)
+        counter_rst_if.next_call.true_statement += centroid_counters[selected_centroid](
+            centroid_counters[selected_centroid] + 1),
+
+        counter_always.set_statement(counter_rst_if)
+
+        # ACC memories
+        # we have one memory for wach dimension and the lines are the centrods acc
+        m.EmbeddedCode('\n//ACC memories')
+        m.EmbeddedCode(
+            '//we have one memory for wach dimension and the lines are the centrods acc')
+        for d in range(dimensions_qty_v):
+            aux = self.create_ram_memory()
+            par = [
+                ('read_f', 0),
+                ('write_f', 0),
+                ('depth', centroid_id_width_v),
+                ('width', acc_width),
+            ]
+            con = [
+                ('clk', clk),
+                ('rd_addr', mem_acc_rd_addr),
+                ('out', mem_acc_out_vec[d]),
+                ('wr', mem_acc_wr_vec[d]),
+                ('wr_addr', mem_acc_wr_addr_vec[d]),
+                ('wr_data', mem_acc_wr_data_vec[d]),
+            ]
+            m.Instance(aux, '%s_d%d' % (aux.name, d), par, con)
+
+        _u.initialize_regs(m)
+        self.cache[name] = m
+        return m
+
     def create_kmeans_top(self):
         input_data_width_v = self.input_data_width
         input_data_qty_v = self.input_data_qty
+        input_data_qty_width_v = self.input_data_qty_width
         dimensions_qty_v = self.dimensions_qty
         centroids_qty_v = self.centroids_qty
         centroid_id_width_v = self.centroid_id_width
@@ -391,9 +562,12 @@ class KMeans:
         m = Module(name)
 
         # parameters for data input for each dimensions
-        input_data_width = m.Parameter('input_data_width', 8)
-        input_data_qty_bit_width = m.Parameter('input_data_qty_bit_width', 8)
-        input_data_qty = m.Parameter('input_data_qty', 256)
+        input_data_width = m.Parameter('input_data_width', input_data_qty_v)
+        input_data_qty = m.Parameter('input_data_qty', input_data_qty_v)
+        input_data_qty_bit_width = m.Parameter(
+            'input_data_qty_bit_width', input_data_qty_width_v)
+        acc_width = m.Parameter(
+            'acc_width', input_data_width_v + ceil(log2(input_data_qty_v)))
         mem_init_file_par_vec = []
         for d in range(dimensions_qty_v):
             mem_init_file_par_vec.append(m.Parameter(
@@ -408,25 +582,40 @@ class KMeans:
         start = m.Input('start')
 
         # Centroids registers
-        m.EmbeddedCode('\n//Centroids regs')
-        centroids_rgs_vec = []
+        m.EmbeddedCode('\n//Centroids unique regs')
+        centroids_vec = []
         for k in range(centroids_qty_v):
-            centroids_rgs_vec.append([])
+            centroids_vec.append([])
             for d in range(dimensions_qty_v):
-                centroids_rgs_vec[k].append(
+                centroids_vec[k].append(
                     m.Reg('k%dd%d' % (k, d), input_data_width))
-        m.EmbeddedCode('\n//New centroids regs')
-        new_centroids_rgs_vec = []
+
+        # New centroids registers
+        m.EmbeddedCode('\n//New centroids vector regs')
+        new_centroids_reg_vec = []
         for k in range(centroids_qty_v):
-            new_centroids_rgs_vec.append([])
+            new_centroids_reg_vec.append(
+                m.Reg('new_centroid_k%d' % k, input_data_width, dimensions_qty_v))
+
+        m.EmbeddedCode('\n//New centroids unique buses')
+        new_centroids_unique_vec = []
+        for k in range(centroids_qty_v):
+            new_centroids_unique_vec.append([])
             for d in range(dimensions_qty_v):
-                new_centroids_rgs_vec[k].append(
-                    m.Reg('new_k%dd%d' % (k, d), input_data_width))
+                new_centroids_unique_vec[k].append(
+                    m.Wire('new_k%dd%d' % (k, d), input_data_width))
+
+        m.EmbeddedCode(
+            '\n//Assigning each new centroid buses to it`s respective reg')
+        for k in range(centroids_qty_v):
+            for d in range(dimensions_qty_v):
+                new_centroids_unique_vec[k][d].assign(
+                    new_centroids_reg_vec[k][d])
 
         # Input data memories
         m.EmbeddedCode('\n//Input data block')
         m.EmbeddedCode(
-            '\n//In this block we have N RAM memories. Each one contains data for one dimension')
+            '//In this block we have N RAM memories. Each one contains data for one input dimension')
 
         input_ram_rd_address = m.Wire(
             'input_ram_rd_address', input_data_qty_bit_width)
@@ -460,13 +649,6 @@ class KMeans:
 
         selected_centroid = m.Wire('selected_centroid', centroid_id_width_v)
 
-        '''
-        n = self.dimensions_qty
-        for i in range(dimensions_qty_v):
-            output_data_vec.append(m.Output(
-                'output_data%d' % i, input_data_width))
-
-        '''
         aux = self.create_kmeans_pipeline()
         par = []
         con = [
@@ -475,383 +657,25 @@ class KMeans:
         for k in range(centroids_qty_v):
             for d in range(dimensions_qty_v):
                 con.append(('centroid%d_d%d' %
-                           (k, d), centroids_rgs_vec[k][d]),)
+                           (k, d), centroids_vec[k][d]),)
         for d in range(dimensions_qty_v):
             con.append(('input_data%d' % d, data_vec[d]),)
-
+        for d in range(dimensions_qty_v):
+            con.append(('output_data%d' % d, d_to_acc_vec[d]),)
+        con.append(('selected_centroid', selected_centroid),)
         m.Instance(aux, aux.name, par, con)
+
+        # Kmeans acc block
+        m.EmbeddedCode('\n//kmeans acc clock')
+
+        aux = self.create_kmeans_acc_block()
+        par = []
+        con = []
+        m.Instance(aux, aux.name, par, con)
+
         _u.initialize_regs(m)
         self.cache[name] = m
         return m
-
-        '''
-        m.EmbeddedCode('\n//control regs and wires - begin')
-        kmeans_rst = m.Reg('kmeans_rst')
-        kmeans_rdy = m.Reg('kmeans_rdy')
-        acc_rdy = m.Reg('acc_rdy')
-        class_done = m.Reg('class_done')
-        data_counter_en = m.Reg('data_counter_en')
-        data_counter = m.Reg('data_counter', n_input_data_b_depth+1)
-        m.EmbeddedCode('//control regs and wires - end')
-
-        m.EmbeddedCode('\n//Centroids regs and wires - begin')
-        up_centroids = m.Reg('up_centroids')
-
-        m.EmbeddedCode('//centroids values')
-        k0_0 = m.Reg('k0_0', data_width)
-        k0_1 = m.Reg('k0_1', data_width)
-        k1_0 = m.Reg('k1_0', data_width)
-        k1_1 = m.Reg('k1_1', data_width)
-
-        m.EmbeddedCode('//new centroids values')
-        k0_0_n = m.Reg('k0_0_n', data_width)
-        k0_1_n = m.Reg('k0_1_n', data_width)
-        k1_0_n = m.Reg('k1_0_n', data_width)
-        k1_1_n = m.Reg('k1_1_n', data_width)
-
-        m.EmbeddedCode('//centroids data counters')
-        k0_counter = m.Reg('k0_counter', n_input_data_b_depth+1)
-        k1_counter = m.Reg('k1_counter', n_input_data_b_depth+1)
-        m.EmbeddedCode('//Centroids regs - end')
-
-        m.EmbeddedCode('\n//input data memories regs and wires - begin')
-        m.EmbeddedCode('//d0 memory')
-        mem_d0_rd_addr = m.Wire('mem_d0_rd_addr', n_input_data_b_depth)
-        mem_d0_out = m.Wire('mem_d0_out', data_width)
-
-        m.EmbeddedCode('//d1 memory')
-        mem_d1_rd_addr = m.Wire('mem_d1_rd_addr', n_input_data_b_depth)
-        mem_d1_out = m.Wire('mem_d1_out', data_width)
-        m.EmbeddedCode('//input data memories regs and wires - end')
-
-        m.EmbeddedCode('\n//kmeans pipeline (kp) wires and regs - begin')
-        m.EmbeddedCode('//st1 outputs - sub data kx')
-        kp_st0_sub00 = m.Reg('kp_st0_sub00', data_width)
-        kp_st0_sub01 = m.Reg('kp_st0_sub01', data_width)
-        kp_st0_sub10 = m.Reg('kp_st0_sub10', data_width)
-        kp_st0_sub11 = m.Reg('kp_st0_sub11', data_width)
-        kp_st0_d0 = m.Reg('kp_st0_d0', data_width)
-        kp_st0_d1 = m.Reg('kp_st0_d1', data_width)
-
-        m.EmbeddedCode('//st1 outputs - sqr')
-        kp_st1_sqr00 = m.Reg('kp_st1_sqr00', data_width*2)
-        kp_st1_sqr01 = m.Reg('kp_st1_sqr01', data_width*2)
-        kp_st1_sqr10 = m.Reg('kp_st1_sqr10', data_width*2)
-        kp_st1_sqr11 = m.Reg('kp_st1_sqr11', data_width*2)
-        kp_st1_d0 = m.Reg('kp_st1_d0', data_width)
-        kp_st1_d1 = m.Reg('kp_st1_d1', data_width)
-
-        m.EmbeddedCode('//st2 outputs - add')
-        kp_st2_add0 = m.Reg('kp_st2_add0', (data_width*2)+1)
-        kp_st2_add1 = m.Reg('kp_st2_add1', (data_width*2)+1)
-        kp_st2_d0 = m.Reg('kp_st2_d0', data_width)
-        kp_st2_d1 = m.Reg('kp_st2_d1', data_width)
-
-        m.EmbeddedCode('//st3 outputs - kmeans decision')
-        kp_st3_d0_out = m.Reg('kp_st3_d0_out', data_width)
-        kp_st3_d1_out = m.Reg('kp_st3_d1_out', data_width)
-        kp_st3_k_out = m.Reg('kp_st3_k_out')
-        m.EmbeddedCode('//kmeans pipeline (kp) wires and regs - end')
-
-        m.EmbeddedCode(
-            '\n//kmeans accumulator memories wires and regs - begin')
-
-        mem_sum_init_rst = m.Reg('mem_sum_init_rst')
-        mem_sum_init_rst_wr_addr = m.Reg('mem_sum_init_rst_wr_addr')
-
-        bck_rd = m.Reg('bck_rd')
-        bck_rd_addr = m.Reg('bck_rd_addr')
-
-        m.EmbeddedCode('//sum init memory init d0')
-        mem_sum_d0_init_rd_addr = m.Wire('mem_sum_d0_init_rd_addr')
-        mem_sum_d0_init_out = m.Wire('mem_sum_d0_init_out')
-        mem_sum_d0_init_wr = m.Wire('mem_sum_d0_init_wr')
-        mem_sum_d0_init_wr_addr = m.Wire('mem_sum_d0_init_wr_addr')
-        mem_sum_d0_init_wr_data = m.Wire('mem_sum_d0_init_wr_data')
-
-        m.EmbeddedCode('//sum init memory init d1')
-        mem_sum_d1_init_rd_addr = m.Wire('mem_sum_d1_init_rd_addr')
-        mem_sum_d1_init_out = m.Wire('mem_sum_d1_init_out')
-        mem_sum_d1_init_wr = m.Wire('mem_sum_d1_init_wr')
-        mem_sum_d1_init_wr_addr = m.Wire('mem_sum_d1_init_wr_addr')
-        mem_sum_d1_init_wr_data = m.Wire('mem_sum_d1_init_wr_data')
-
-        m.EmbeddedCode('//sum memory d0')
-        mem_sum_d0_rd_addr = m.Wire('mem_sum_d0_rd_addr')
-        mem_sum_d0_out = m.Wire('mem_sum_d0_out', acc_sum_width)
-        mem_sum_d0_wr = m.Wire('mem_sum_d0_wr')
-        mem_sum_d0_wr_addr = m.Wire('mem_sum_d0_wr_addr')
-        mem_sum_d0_wr_data = m.Wire('mem_sum_d0_wr_data', acc_sum_width)
-
-        m.EmbeddedCode('//sum  memory d1')
-        mem_sum_d1_rd_addr = m.Wire('mem_sum_d1_rd_addr')
-        mem_sum_d1_out = m.Wire('mem_sum_d1_out', acc_sum_width)
-        mem_sum_d1_wr = m.Wire('mem_sum_d1_wr')
-        mem_sum_d1_wr_addr = m.Wire('mem_sum_d1_wr_addr')
-        mem_sum_d1_wr_data = m.Wire('mem_sum_d1_wr_data', acc_sum_width)
-        m.EmbeddedCode('\n//kmeans accumulator memory wires and regs - end')
-
-        m.EmbeddedCode('\n//Implementation - begin')
-
-        m.EmbeddedCode('\n//centroids values control')
-        m.Always(Posedge(clk))(
-            If(rst)(
-                k0_0(p_k0_0),
-                k0_1(p_k0_1),
-                k1_0(p_k1_0),
-                k1_1(p_k1_1),
-            ).Elif(up_centroids)(
-                k0_0(k0_0_n),
-                k0_1(k0_1_n),
-                k1_0(k1_0_n),
-                k1_1(k1_1_n),
-            )
-        )
-
-        m.EmbeddedCode('\n//kmeans pipeline (kp) implementation')
-
-        m.Always(Posedge(clk))(
-            kp_st0_sub00(mem_d0_out - k0_0),
-            kp_st0_sub01(mem_d1_out - k0_1),
-            kp_st0_sub10(mem_d0_out - k1_0),
-            kp_st0_sub11(mem_d1_out - k1_1),
-            kp_st0_d0(mem_d0_out),
-            kp_st0_d1(mem_d1_out),
-            kp_st1_sqr00(kp_st0_sub00*kp_st0_sub00),
-            kp_st1_sqr01(kp_st0_sub01*kp_st0_sub01),
-            kp_st1_sqr10(kp_st0_sub10*kp_st0_sub10),
-            kp_st1_sqr11(kp_st0_sub11*kp_st0_sub11),
-            kp_st1_d0(kp_st0_d0),
-            kp_st1_d1(kp_st0_d1),
-            kp_st2_add0(kp_st1_sqr00 + kp_st1_sqr01),
-            kp_st2_add1(kp_st1_sqr10 + kp_st1_sqr11),
-            kp_st2_d0(kp_st1_d0),
-            kp_st2_d1(kp_st1_d1),
-            kp_st3_k_out(Mux(kp_st2_add0 < kp_st2_add1, 0, 1)),
-            kp_st3_d0_out(kp_st2_d0),
-            kp_st3_d1_out(kp_st2_d1),
-        )
-
-        m.EmbeddedCode(
-            '\n//kmeans accumulator memories implementation')
-        m.EmbeddedCode('//sum init memory d0')
-        mem_sum_d0_init_rd_addr.assign(kp_st3_k_out)
-        mem_sum_d0_init_wr.assign(Mux(mem_sum_init_rst, 1, acc_rdy))
-        mem_sum_d0_init_wr_addr.assign(
-            Mux(mem_sum_init_rst, mem_sum_init_rst_wr_addr, kp_st3_k_out))
-        mem_sum_d0_init_wr_data.assign(Mux(mem_sum_init_rst, 0, 1))
-
-        m.EmbeddedCode('//sum init memory d1')
-        mem_sum_d1_init_rd_addr.assign(kp_st3_k_out)
-        mem_sum_d1_init_wr.assign(Mux(mem_sum_init_rst, 1, acc_rdy))
-        mem_sum_d1_init_wr_addr.assign(
-            Mux(mem_sum_init_rst, mem_sum_init_rst_wr_addr, kp_st3_k_out))
-        mem_sum_d1_init_wr_data.assign(Mux(mem_sum_init_rst, 0, 1))
-
-        m.EmbeddedCode('//sum memory d0')
-        mem_sum_d0_rd_addr.assign(Mux(bck_rd, bck_rd_addr, kp_st3_k_out))
-        mem_sum_d0_wr.assign(acc_rdy)
-        mem_sum_d0_wr_addr.assign(kp_st3_k_out)
-        mem_sum_d0_wr_data.assign(
-            Mux(mem_sum_d0_init_out, mem_sum_d0_out + kp_st3_d0_out, kp_st3_d0_out))
-
-        m.EmbeddedCode('//sum memory d1')
-        mem_sum_d1_rd_addr.assign(Mux(bck_rd, bck_rd_addr, kp_st3_k_out))
-        mem_sum_d1_wr.assign(acc_rdy)
-        mem_sum_d1_wr_addr.assign(kp_st3_k_out)
-        mem_sum_d1_wr_data.assign(
-            Mux(mem_sum_d1_init_out, mem_sum_d1_out + kp_st3_d1_out, kp_st3_d1_out))
-
-        m.EmbeddedCode('\n//init memories reset')
-        m.Always(Posedge(clk))(
-            If(kmeans_rst)(
-                kmeans_rdy(0),
-                mem_sum_init_rst(1),
-                mem_sum_init_rst_wr_addr(0)
-            ).Else(
-                If(Uand(mem_sum_init_rst_wr_addr))(
-                    mem_sum_init_rst(0),
-                    kmeans_rdy(1),
-                ).Else(
-                    mem_sum_init_rst_wr_addr.inc(),
-                ),
-            )
-        )
-
-        m.EmbeddedCode('\n//centroids data counters')
-        m.Always(Posedge(clk))(
-            If(kmeans_rst)(
-                k0_counter(0),
-                k1_counter(0),
-            ).Else(
-                Case(Cat(acc_rdy, kp_st3_k_out))(
-                    When(Int(2, 2, 2))(
-                        k0_counter.inc()
-                    ),
-                    When(Int(3, 2, 2))(
-                        k1_counter.inc()
-                    ),
-                )
-            )
-        )
-
-        m.EmbeddedCode('\n//data and latency counter exec')
-        m.Always(Posedge(clk))(
-            If(kmeans_rst)(
-                data_counter(0),
-                acc_rdy(0),
-                class_done(0),
-            ).Elif(data_counter_en)(
-                If(data_counter == n_input_data - 1)(
-                    class_done(1),
-                    acc_rdy(0),
-                ).Else(
-                    If(data_counter == 3)(
-                        acc_rdy(1)
-                    ),
-                    data_counter.inc()
-                )
-            )
-        )
-
-        fsm_kmeans_control = m.Reg('fsm_kmeans_control', 6)
-        fsm_kc_kmeans_rst = m.Localparam('fsm_kc_kmeans_rst', 0)
-        fsm_kc_wait_init = m.Localparam('fsm_kc_wait_init', 1)
-        fsm_kc_wait_class = m.Localparam('fsm_kc_wait_class', 2)
-
-        m.EmbeddedCode('\n//fsm control')
-        m.Always(Posedge(clk))(
-            If(rst)(
-                kmeans_rst(0),
-                up_centroids(0),
-                fsm_kmeans_control(fsm_kc_kmeans_rst)
-            ).Elif(start)(
-                Case(fsm_kmeans_control)(
-                    When(fsm_kc_kmeans_rst)(
-                        kmeans_rst(1),
-                        fsm_kmeans_control(fsm_kc_wait_init),
-                    ),
-                    When(fsm_kc_wait_init)(
-                        kmeans_rst(0),
-                        If(kmeans_rdy)(
-                            data_counter_en(1),
-                            fsm_kmeans_control(fsm_kc_wait_class)
-                        )
-                    ),
-                    When(fsm_kc_wait_class)(
-                        If(class_done)(
-                            data_counter_en(0),
-                        )
-                    )
-                )
-            )
-        )
-
-        m.EmbeddedCode('\n//Implementation - end')
-
-        m.EmbeddedCode('\n//Modules instantiation - begin')
-        m.EmbeddedCode('\n//kmeans input data memories')
-        m.EmbeddedCode('//d0 memory')
-        aux = self.create_RAM()
-        par = [
-            ('read_f', Int(1, 1, 2)),
-            ('init_file', mem_d0_init_file),
-            ('write_f', Int(0, 1, 2)),
-            ('depth', n_input_data_b_depth),
-            ('width', data_width)
-        ]
-        con = [
-            ('clk', clk),
-            ('rd_addr', data_counter[0:n_input_data_b_depth]),
-            ('out', mem_d0_out),
-        ]
-        m.Instance(aux, '%s_d0' % aux.name, par, con)
-
-        m.EmbeddedCode('//d1 memory')
-        par = [
-            ('read_f', Int(1, 1, 2)),
-            ('init_file', mem_d1_init_file),
-            ('write_f', Int(0, 1, 2)),
-            ('depth', n_input_data_b_depth),
-            ('width', data_width)
-        ]
-        con = [
-            ('clk', clk),
-            ('rd_addr', data_counter[0:n_input_data_b_depth]),
-            ('out', mem_d1_out),
-        ]
-        m.Instance(aux, '%s_d1' % aux.name, par, con)
-
-        m.EmbeddedCode('\n//Sum memories and init memories')
-        m.EmbeddedCode('//d0 init memory')
-        par = [
-            ('read_f', Int(0, 1, 2)),
-            ('write_f', Int(0, 1, 2)),
-            ('depth', 1),
-            ('width', 1)
-        ]
-        con = [
-            ('clk', clk),
-            ('rd_addr', mem_sum_d0_init_rd_addr),
-            ('out', mem_sum_d0_init_out),
-            ('wr', mem_sum_d0_init_wr),
-            ('wr_addr', mem_sum_d0_init_wr_addr),
-            ('wr_data', mem_sum_d0_init_wr_data),
-        ]
-        m.Instance(aux, '%s_sum_d0_init' % aux.name, par, con)
-
-        m.EmbeddedCode('//d1 init memory')
-        par = [
-            ('read_f', Int(0, 1, 2)),
-            ('write_f', Int(0, 1, 2)),
-            ('depth', 1),
-            ('width', 1)
-        ]
-        con = [
-            ('clk', clk),
-            ('rd_addr', mem_sum_d1_init_rd_addr),
-            ('out', mem_sum_d1_init_out),
-            ('wr', mem_sum_d1_init_wr),
-            ('wr_addr', mem_sum_d1_init_wr_addr),
-            ('wr_data', mem_sum_d1_init_wr_data),
-        ]
-        m.Instance(aux, '%s_sum_d1_init' % aux.name, par, con)
-
-        m.EmbeddedCode('//d0 sum memory')
-        par = [
-            ('read_f', Int(0, 1, 2)),
-            ('write_f', Int(0, 1, 2)),
-            ('depth', 1),
-            ('width', acc_sum_width)
-        ]
-        con = [
-            ('clk', clk),
-            ('rd_addr', mem_sum_d0_rd_addr),
-            ('out', mem_sum_d0_out),
-            ('wr', mem_sum_d0_wr),
-            ('wr_addr', mem_sum_d0_wr_addr),
-            ('wr_data', mem_sum_d0_wr_data),
-        ]
-        m.Instance(aux, '%s_sum_d0' % aux.name, par, con)
-
-        m.EmbeddedCode('//d1 sum memory')
-        par = [
-            ('read_f', Int(0, 1, 2)),
-            ('write_f', Int(0, 1, 2)),
-            ('depth', 1),
-            ('width', acc_sum_width)
-        ]
-        con = [
-            ('clk', clk),
-            ('rd_addr', mem_sum_d1_rd_addr),
-            ('out', mem_sum_d1_out),
-            ('wr', mem_sum_d1_wr),
-            ('wr_addr', mem_sum_d1_wr_addr),
-            ('wr_data', mem_sum_d1_wr_data),
-        ]
-        m.Instance(aux, '%s_sum_d1' % aux.name, par, con)
-
-        m.EmbeddedCode('\n//Modules instantiation - end')'''
 
     def create_kmeans_testbench(self) -> str:
         name = "testbench_kmeans_k2s2"
@@ -906,8 +730,8 @@ class KMeans:
 
 # kmeans_pipeline.to_verilog('./verilog/pipeline.v')
 
-for k in range(2, 4):
-    for d in range(2, 6):
+for k in range(2, 6):
+    for d in range(2, 4):
         km = KMeans(centroids_qty=k, dimensions_qty=d)
         kmeans_top = km.create_kmeans_top()
         kmeans_top.to_verilog('./verilog/%s.v' % kmeans_top.name)

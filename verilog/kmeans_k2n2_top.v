@@ -2,9 +2,10 @@
 
 module kmeans_k2n2_top #
 (
-  parameter input_data_width = 8,
-  parameter input_data_qty_bit_width = 8,
+  parameter input_data_width = 256,
   parameter input_data_qty = 256,
+  parameter input_data_qty_bit_width = 8,
+  parameter acc_width = 16,
   parameter mem_d0_init_file = "./db/d0.txt",
   parameter mem_d1_init_file = "./db/d1.txt",
   parameter k0_d0_initial = 0,
@@ -19,21 +20,30 @@ module kmeans_k2n2_top #
 );
 
 
-  //Centroids regs
+  //Centroids unique regs
   reg [input_data_width-1:0] k0d0;
   reg [input_data_width-1:0] k0d1;
   reg [input_data_width-1:0] k1d0;
   reg [input_data_width-1:0] k1d1;
 
-  //New centroids regs
-  reg [input_data_width-1:0] new_k0d0;
-  reg [input_data_width-1:0] new_k0d1;
-  reg [input_data_width-1:0] new_k1d0;
-  reg [input_data_width-1:0] new_k1d1;
+  //New centroids vector regs
+  reg [input_data_width-1:0] new_centroid_k0 [0:2-1];
+  reg [input_data_width-1:0] new_centroid_k1 [0:2-1];
+
+  //New centroids unique buses
+  wire [input_data_width-1:0] new_k0d0;
+  wire [input_data_width-1:0] new_k0d1;
+  wire [input_data_width-1:0] new_k1d0;
+  wire [input_data_width-1:0] new_k1d1;
+
+  //Assigning each new centroid buses to it`s respective reg
+  assign new_k0d0 = new_centroid_k0[0];
+  assign new_k0d1 = new_centroid_k0[1];
+  assign new_k1d0 = new_centroid_k1[0];
+  assign new_k1d1 = new_centroid_k1[1];
 
   //Input data block
-
-  //In this block we have N RAM memories. Each one contains data for one dimension
+  //In this block we have N RAM memories. Each one contains data for one input dimension
   wire [input_data_qty_bit_width-1:0] input_ram_rd_address;
   wire [input_data_width-1:0] d0;
   wire [input_data_width-1:0] d1;
@@ -68,19 +78,33 @@ module kmeans_k2n2_top #
     .centroid1_d0(k1d0),
     .centroid1_d1(k1d1),
     .input_data0(d0),
-    .input_data1(d1)
+    .input_data1(d1),
+    .output_data0(d0_to_acc),
+    .output_data1(d1_to_acc),
+    .selected_centroid(selected_centroid)
   );
 
+
+  //kmeans acc clock
+
+  kmeans_acc_block_k2n2
+  kmeans_acc_block_k2n2
+  (
+  );
+
+  integer i_initial;
 
   initial begin
     k0d0 = 0;
     k0d1 = 0;
     k1d0 = 0;
     k1d1 = 0;
-    new_k0d0 = 0;
-    new_k0d1 = 0;
-    new_k1d0 = 0;
-    new_k1d1 = 0;
+    for(i_initial=0; i_initial<2; i_initial=i_initial+1) begin
+      new_centroid_k0[i_initial] = 0;
+    end
+    for(i_initial=0; i_initial<2; i_initial=i_initial+1) begin
+      new_centroid_k1[i_initial] = 0;
+    end
   end
 
 
@@ -306,6 +330,155 @@ module kmeans_pipeline_k2_d2 #
     data_prop_d1_st2 = 0;
     data_prop_d0_st3 = 0;
     data_prop_d1_st3 = 0;
+  end
+
+
+endmodule
+
+
+
+module kmeans_acc_block_k2n2 #
+(
+  parameter input_data_width = 8,
+  parameter input_data_qty_bit_width = 8,
+  parameter acc_width = 16
+)
+(
+  input clk,
+  input rst,
+  input acc_enable,
+  input [input_data_width-1:0] d0_to_acc,
+  input [input_data_width-1:0] d1_to_acc,
+  input [1-1:0] selected_centroid,
+  input rd_acc_en,
+  input [1-1:0] rd_acc_centroid,
+  output reg [1-1:0] centroid_output,
+  output [acc_width-1:0] acc0_output,
+  output [acc_width-1:0] acc1_output,
+  output [input_data_qty_bit_width-1:0] acc_counter_output
+);
+
+
+  //counters for each centroid
+  reg [input_data_qty_bit_width-1:0] centroid_counter [0:2-1];
+
+  //Memories valid content register flag
+  reg [2-1:0] acc0_valid_content;
+  reg [2-1:0] acc1_valid_content;
+
+  //Memories wires and regs
+  wire [1-1:0] mem_acc_rd_addr;
+  wire [acc_width-1:0] mem_acc_0_out;
+  wire [acc_width-1:0] mem_acc_1_out;
+  wire mem_acc_0_wr;
+  wire mem_acc_1_wr;
+  wire [1-1:0] mem_acc0_wr_addr;
+  wire [1-1:0] mem_acc1_wr_addr;
+  wire [acc_width-1:0] mem_acc0_wr_data;
+  wire [acc_width-1:0] mem_acc1_wr_data;
+
+  //Assigns to control the read and write acc logic
+  //First the read conditions:
+  //If we are accumulating, we need to read the memory, add the input content to the memory content if it is valid
+  //If we are reading the ACC, we need to have authority to read with no interference from the pipeline`s
+  //selected centroid input
+  assign mem_acc_rd_addr = (rd_acc_en)? rd_acc_centroid : selected_centroid;
+
+  //The write enable signal is controled by the input "acc_enable"
+  assign mem_acc_0_wr = acc_enable;
+  assign mem_acc_1_wr = acc_enable;
+
+  //The write address is the number of selected centroid given by the "selected_centroid" input signal
+  assign mem_acc0_wr_addr = selected_centroid;
+  assign mem_acc1_wr_addr = selected_centroid;
+
+  //Next the write data is the sum of the memory content + input data for each memory if the memory is initialized.
+  assign mem_acc0_wr_data = (acc0_valid_content[selected_centroid])? d0_to_acc + mem_acc_0_out : d0_to_acc;
+  assign mem_acc1_wr_data = (acc1_valid_content[selected_centroid])? d1_to_acc + mem_acc_1_out : d1_to_acc;
+
+  //Output data assigns
+  assign acc0_output = mem_acc_0_out;
+  assign acc1_output = mem_acc_1_out;
+
+  //Resetting the ACC contents and updating it`s bits when a data is written in memory
+
+  always @(posedge clk) begin
+    if(rst) begin
+      acc0_valid_content <= 0;
+      acc1_valid_content <= 0;
+    end else begin
+      if(acc_enable) begin
+        acc0_valid_content[selected_centroid] <= 1;
+        acc1_valid_content[selected_centroid] <= 1;
+      end 
+    end
+  end
+
+
+  //Output counter assigns
+  assign acc_counter_output = centroid_counter[rd_acc_centroid];
+
+  //Resetting the centroids counters and updating them when a data is written in a centroid line
+
+  always @(posedge clk) begin
+    if(rst) begin
+      centroid_counter[0] <= 0;
+      centroid_counter[1] <= 0;
+    end else begin
+      if(acc_enable) begin
+        centroid_counter[selected_centroid] <= centroid_counter[selected_centroid] + 1;
+      end 
+    end
+  end
+
+
+  //ACC memories
+  //we have one memory for wach dimension and the lines are the centrods acc
+
+  RAM
+  #(
+    .read_f(0),
+    .write_f(0),
+    .depth(1),
+    .width(acc_width)
+  )
+  RAM_d0
+  (
+    .clk(clk),
+    .rd_addr(mem_acc_rd_addr),
+    .out(mem_acc_0_out),
+    .wr(mem_acc_0_wr),
+    .wr_addr(mem_acc0_wr_addr),
+    .wr_data(mem_acc0_wr_data)
+  );
+
+
+  RAM
+  #(
+    .read_f(0),
+    .write_f(0),
+    .depth(1),
+    .width(acc_width)
+  )
+  RAM_d1
+  (
+    .clk(clk),
+    .rd_addr(mem_acc_rd_addr),
+    .out(mem_acc_1_out),
+    .wr(mem_acc_1_wr),
+    .wr_addr(mem_acc1_wr_addr),
+    .wr_data(mem_acc1_wr_data)
+  );
+
+  integer i_initial;
+
+  initial begin
+    centroid_output = 0;
+    for(i_initial=0; i_initial<2; i_initial=i_initial+1) begin
+      centroid_counter[i_initial] = 0;
+    end
+    acc0_valid_content = 0;
+    acc1_valid_content = 0;
   end
 
 
