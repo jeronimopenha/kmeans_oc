@@ -410,23 +410,17 @@ class KMeans:
         for d in range(dimensions_qty_v):
             acc_output_vec.append(
                 m.Output('acc%d_output' % d, acc_width))
-        acc_counter_output = m.Output('acc_counter_output', input_data_qty_bit_width)
+        acc_counter_output = m.Output(
+            'acc_counter_output', input_data_qty_bit_width)
 
         # counters for each centroid acc data
         m.EmbeddedCode('\n//counters for each centroid')
         centroid_counters = m.Reg(
             'centroid_counter', input_data_qty_bit_width, centroids_qty_v)
-        #centroid_counter_vec = []
-        # for d in range(centroids_qty_v):
-        #    centroid_counter_vec.append(
-        #        m.Reg('k%d_counter' % d, input_data_qty_bit_width))
 
         # Memories valid content register flag
         m.EmbeddedCode('\n//Memories valid content register flag')
-        acc_valid_content_vec = []
-        for d in range(dimensions_qty_v):
-            acc_valid_content_vec.append(
-                m.Reg('acc%d_valid_content' % d, centroids_qty_v))
+        acc_valid_content = m.Reg('acc_valid_content', centroids_qty_v)
 
         # Memories wires and regs
         m.EmbeddedCode('\n//Memories wires and regs')
@@ -481,7 +475,7 @@ class KMeans:
             '\n//Next the write data is the sum of the memory content + input data for each memory if the memory is initialized.')
         for d in range(dimensions_qty_v):
             mem_acc_wr_data_vec[d].assign(
-                Mux(acc_valid_content_vec[d][selected_centroid], d_to_acc_vec[d] + mem_acc_out_vec[d], d_to_acc_vec[d]))
+                Mux(acc_valid_content[selected_centroid], d_to_acc_vec[d] + mem_acc_out_vec[d], d_to_acc_vec[d]))
 
         # Output data assigns
         m.EmbeddedCode('\n//Output data assigns')
@@ -491,18 +485,17 @@ class KMeans:
         # Resetting the ACC contents and updating it`s bits when a data is written in memory
         m.EmbeddedCode(
             '\n//Resetting the ACC contents and updating it`s bits when a data is written in memory')
-        content_always = m.Always(Posedge(clk))
-        content_rst_if = If(rst)().Elif(acc_enable)()
-        for d in range(dimensions_qty_v):
-            content_rst_if.true_statement += (acc_valid_content_vec[d](0),)
-            content_rst_if.next_call.true_statement += (
-                acc_valid_content_vec[d][selected_centroid](1),)
-        content_always.set_statement(content_rst_if)
-
+        m.Always(Posedge(clk))(
+            If(rst)(
+                acc_valid_content(0)
+            ).Elif(acc_enable)(
+                acc_valid_content[selected_centroid](1)
+            )
+        )
         # Output counter assigns
         m.EmbeddedCode('\n//Output counter assigns')
         acc_counter_output.assign(centroid_counters[rd_acc_centroid])
-        
+
         # Resetting the centroids counters and updating them when a data is written in a centroid line
         m.EmbeddedCode(
             '\n//Resetting the centroids counters and updating them when a data is written in a centroid line')
@@ -562,7 +555,7 @@ class KMeans:
         m = Module(name)
 
         # parameters for data input for each dimensions
-        input_data_width = m.Parameter('input_data_width', input_data_qty_v)
+        input_data_width = m.Parameter('input_data_width', input_data_width_v)
         input_data_qty = m.Parameter('input_data_qty', input_data_qty_v)
         input_data_qty_bit_width = m.Parameter(
             'input_data_qty_bit_width', input_data_qty_width_v)
@@ -666,11 +659,36 @@ class KMeans:
         m.Instance(aux, aux.name, par, con)
 
         # Kmeans acc block
-        m.EmbeddedCode('\n//kmeans acc clock')
-
+        m.EmbeddedCode('\n//kmeans acc block')
+        acc_output_vec = []
+        for d in range(dimensions_qty_v):
+            acc_output_vec.append(
+                m.Wire('acc%d_output' % d, acc_width))
+        centroid_acc_output = m.Wire(
+            'centroid_acc_output', centroid_id_width_v)
+        acc_counter_output = m.Wire(
+            'acc_counter_output', input_data_qty_bit_width)
         aux = self.create_kmeans_acc_block()
-        par = []
-        con = []
+        par = [
+            ('input_data_width', input_data_width),
+            ('input_data_qty_bit_width', input_data_qty_bit_width),
+            ('acc_width', acc_width),
+        ]
+        # FIXME rst and acc_enable rd_acc_en rd_acc_centroid
+        con = [
+            ('clk', clk),
+            ('rst', 0),
+            ('acc_enable', 0),
+        ]
+        for d in range(dimensions_qty_v):
+            con.append(('d%d_to_acc' % d, d_to_acc_vec[d]),)
+        con.append(('selected_centroid', selected_centroid),)
+        con.append(('rd_acc_en', 0),)
+        con.append(('rd_acc_centroid', 0))
+        con.append(('centroid_output', centroid_acc_output),)
+        for d in range(dimensions_qty_v):
+            con.append(('acc%d_output' % d, acc_output_vec[d]),)
+        con.append(('acc_counter_output', acc_counter_output),)
         m.Instance(aux, aux.name, par, con)
 
         _u.initialize_regs(m)

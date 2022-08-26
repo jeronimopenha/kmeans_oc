@@ -2,7 +2,7 @@
 
 module kmeans_k4n2_top #
 (
-  parameter input_data_width = 256,
+  parameter input_data_width = 8,
   parameter input_data_qty = 256,
   parameter input_data_qty_bit_width = 8,
   parameter acc_width = 16,
@@ -107,11 +107,32 @@ module kmeans_k4n2_top #
   );
 
 
-  //kmeans acc clock
+  //kmeans acc block
+  wire [acc_width-1:0] acc0_output;
+  wire [acc_width-1:0] acc1_output;
+  wire [2-1:0] centroid_acc_output;
+  wire [input_data_qty_bit_width-1:0] acc_counter_output;
 
   kmeans_acc_block_k4n2
+  #(
+    .input_data_width(input_data_width),
+    .input_data_qty_bit_width(input_data_qty_bit_width),
+    .acc_width(acc_width)
+  )
   kmeans_acc_block_k4n2
   (
+    .clk(clk),
+    .rst(0),
+    .acc_enable(0),
+    .d0_to_acc(d0_to_acc),
+    .d1_to_acc(d1_to_acc),
+    .selected_centroid(selected_centroid),
+    .rd_acc_en(0),
+    .rd_acc_centroid(0),
+    .centroid_output(centroid_acc_output),
+    .acc0_output(acc0_output),
+    .acc1_output(acc1_output),
+    .acc_counter_output(acc_counter_output)
   );
 
   integer i_initial;
@@ -447,8 +468,7 @@ module kmeans_acc_block_k4n2 #
   reg [input_data_qty_bit_width-1:0] centroid_counter [0:4-1];
 
   //Memories valid content register flag
-  reg [4-1:0] acc0_valid_content;
-  reg [4-1:0] acc1_valid_content;
+  reg [4-1:0] acc_valid_content;
 
   //Memories wires and regs
   wire [2-1:0] mem_acc_rd_addr;
@@ -477,8 +497,8 @@ module kmeans_acc_block_k4n2 #
   assign mem_acc1_wr_addr = selected_centroid;
 
   //Next the write data is the sum of the memory content + input data for each memory if the memory is initialized.
-  assign mem_acc0_wr_data = (acc0_valid_content[selected_centroid])? d0_to_acc + mem_acc_0_out : d0_to_acc;
-  assign mem_acc1_wr_data = (acc1_valid_content[selected_centroid])? d1_to_acc + mem_acc_1_out : d1_to_acc;
+  assign mem_acc0_wr_data = (acc_valid_content[selected_centroid])? d0_to_acc + mem_acc_0_out : d0_to_acc;
+  assign mem_acc1_wr_data = (acc_valid_content[selected_centroid])? d1_to_acc + mem_acc_1_out : d1_to_acc;
 
   //Output data assigns
   assign acc0_output = mem_acc_0_out;
@@ -488,12 +508,10 @@ module kmeans_acc_block_k4n2 #
 
   always @(posedge clk) begin
     if(rst) begin
-      acc0_valid_content <= 0;
-      acc1_valid_content <= 0;
+      acc_valid_content <= 0;
     end else begin
       if(acc_enable) begin
-        acc0_valid_content[selected_centroid] <= 1;
-        acc1_valid_content[selected_centroid] <= 1;
+        acc_valid_content[selected_centroid] <= 1;
       end 
     end
   end
@@ -563,8 +581,7 @@ module kmeans_acc_block_k4n2 #
     for(i_initial=0; i_initial<4; i_initial=i_initial+1) begin
       centroid_counter[i_initial] = 0;
     end
-    acc0_valid_content = 0;
-    acc1_valid_content = 0;
+    acc_valid_content = 0;
   end
 
 
